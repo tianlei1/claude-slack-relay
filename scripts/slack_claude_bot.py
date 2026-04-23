@@ -9,12 +9,12 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from logger import get_logger
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import BOT_TOKEN, APP_TOKEN
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log = get_logger(__name__)
-
-BOT_TOKEN = "xoxb-9181694441568-10971035698851-Th0twCFLt6duMNgavhyAFCDY"
-APP_TOKEN = "xapp-1-A0AUJURG98T-10975399680854-b136da1e3c63a77ea2dcff920ec1875cfde6690487d473b4e8a8ba48c1400207"
 
 app = App(token=BOT_TOKEN)
 
