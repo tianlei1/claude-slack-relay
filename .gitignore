@@ -5,3 +5,4 @@ sessions.json
 in_progress.json
 __pycache__/
 *.pyc
+.env

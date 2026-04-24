@@ -5,16 +5,18 @@ import platform
 import time
 os.environ["PYTHONUTF8"] = "1"
 
+from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from logger import get_logger
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 log = get_logger(__name__)
 
-BOT_TOKEN = "xoxb-9181694441568-10971035698851-Th0twCFLt6duMNgavhyAFCDY"
-APP_TOKEN = "xapp-1-A0AUJURG98T-10975399680854-b136da1e3c63a77ea2dcff920ec1875cfde6690487d473b4e8a8ba48c1400207"
+BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
 
 app = App(token=BOT_TOKEN)
 
