@@ -278,11 +278,15 @@ def lookup_ad_email():
     return None
 
 
-ALLOWED_USER_EMAIL = (os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email() or "").strip() or None
+_email_from_env = (os.environ.get("ALLOWED_USER_EMAIL") or "").strip() or None
+_email_from_ad = lookup_ad_email() if not _email_from_env else None
+ALLOWED_USER_EMAIL = _email_from_env or _email_from_ad
 if not ALLOWED_USER_EMAIL:
     log.error("ALLOWED_USER_EMAIL not set and AD lookup failed — bot will reject all messages. Set ALLOWED_USER_EMAIL in .env")
+elif _email_from_env:
+    log.info(f"Whitelist email: {ALLOWED_USER_EMAIL} (from .env)")
 else:
-    log.info(f"Whitelist email: {ALLOWED_USER_EMAIL}")
+    log.info(f"Whitelist email: {ALLOWED_USER_EMAIL} (from AD)")
 _whitelist_user_id = None
 
 
