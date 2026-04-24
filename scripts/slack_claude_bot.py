@@ -270,13 +270,17 @@ def lookup_ad_email():
         email = result.stdout.strip().lower()
         if "@" in email:
             return email
-    except Exception:
-        pass
+        log.warning(f"AD email lookup returned no valid email (output: '{result.stdout.strip()[:100]}')")
+    except Exception as e:
+        log.warning(f"AD email lookup failed: {e}")
     return None
 
 
-ALLOWED_USER_EMAIL = lookup_ad_email()
-log.info(f"Whitelist email: {ALLOWED_USER_EMAIL}")
+ALLOWED_USER_EMAIL = os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email()
+if not ALLOWED_USER_EMAIL:
+    log.error("ALLOWED_USER_EMAIL not set and AD lookup failed — bot will reject all messages. Set ALLOWED_USER_EMAIL in .env")
+else:
+    log.info(f"Whitelist email: {ALLOWED_USER_EMAIL}")
 _whitelist_user_id = None
 
 
