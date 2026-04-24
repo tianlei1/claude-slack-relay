@@ -137,7 +137,7 @@ class MCPServerManager:
 
     def _watch_servers(self):
         while True:
-            time.sleep(10)
+            time.sleep(180)
             with self._lock:
                 for name, info in list(self._servers.items()):
                     if info["proc"].poll() is not None:

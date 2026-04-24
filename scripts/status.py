@@ -48,6 +48,10 @@ def derive_process_name(cmdline):
             return "status check"
         if "stop.py" in part_lower:
             return "stop script"
+        if "mcp-atlassian" in part_lower:
+            return "MCP Atlassian server"
+        if "mcp_manager" in part_lower:
+            return "MCP manager"
     if any("scons" in c.lower() for c in cmdline):
         return "SCons build worker"
     if any("sconstruct" in c.lower() for c in cmdline):
@@ -104,3 +108,50 @@ for entry in in_progress.values():
             print(f"            claude PID {pid}  (already exited)  channel={channel}")
     else:
         print(f"            channel={channel}  (starting...)")
+
+# MCP servers
+WORK_DIR = os.path.dirname(BASE_DIR)
+runtime_config_path = os.path.join(WORK_DIR, ".mcp.runtime.json")
+try:
+    with open(runtime_config_path, encoding="utf-8") as f:
+        runtime_config = json.load(f)
+    mcp_servers = runtime_config.get("mcpServers", {})
+    print()
+    print("[MCP SERVERS]")
+    print(f"  {'Name':<20} {'Mode':<8} {'Status'}")
+    print(f"  {'-'*20} {'-'*8} {'-'*10}")
+    for name, cfg in mcp_servers.items():
+        if cfg.get("type") == "sse":
+            url = cfg.get("url", "")
+            port = int(url.split(":")[-1].split("/")[0])
+            try:
+                import socket
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    status = f"running (port {port})"
+            except OSError:
+                status = f"DOWN (port {port})"
+        else:
+            status = "per-request"
+        mode = "SSE" if cfg.get("type") == "sse" else "stdio"
+        print(f"  {name:<20} {mode:<8} {status}")
+except Exception:
+    pass
+
+# Python processes
+print()
+print("[PYTHON PROCESSES]")
+print(f"  {'PID':<8} {'Name':<30} {'Mem(MB)':>8}  Status")
+print(f"  {'-'*8} {'-'*30} {'-'*8}  {'-'*10}")
+for proc in psutil.process_iter(["pid", "name", "status"]):
+    try:
+        if proc.info["name"].lower() != "python.exe":
+            continue
+        pid = proc.info["pid"]
+        if pid == self_pid:
+            continue
+        cmdline = proc.cmdline()
+        mem = round(proc.memory_info().rss / 1024 / 1024, 1)
+        label = derive_process_name(cmdline)
+        print(f"  {pid:<8} {label:<30} {mem:>8.1f}  {proc.info['status']}")
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        continue
