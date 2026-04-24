@@ -1,6 +1,7 @@
 import os
 import sys
 import datetime
+import json
 import psutil
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,3 +30,28 @@ except psutil.NoSuchProcess:
     print(f"[STATUS] ClaudeBot is NOT running (process {bot_pid} not found)")
     os.remove(PID_FILE)
     sys.exit(1)
+
+IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
+try:
+    with open(IN_PROGRESS_FILE, encoding="utf-8") as f:
+        in_progress = json.load(f)
+except Exception:
+    in_progress = {}
+
+if in_progress:
+    print(f"        Active Tasks: {len(in_progress)}")
+    for entry in in_progress.values():
+        pid = entry.get("pid")
+        channel = entry["channel"]
+        if pid:
+            try:
+                cp = psutil.Process(pid)
+                mem = round(cp.memory_info().rss / 1024 / 1024, 1)
+                status = cp.status()
+                print(f"          claude PID {pid}  channel={channel}  mem={mem}MB  status={status}")
+            except psutil.NoSuchProcess:
+                print(f"          claude PID {pid}  channel={channel}  (already exited)")
+        else:
+            print(f"          channel={channel}  (starting...)")
+else:
+    print(f"        Active Tasks: 0")

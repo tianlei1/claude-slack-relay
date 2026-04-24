@@ -13,15 +13,18 @@ with open(PID_FILE) as f:
     bot_pid = int(f.read().strip())
 
 try:
-    p = psutil.Process(bot_pid)
-    p.terminate()
-    p.wait(timeout=5)
-    print(f"ClaudeBot stopped (PID {bot_pid})")
+    parent = psutil.Process(bot_pid)
+    children = parent.children(recursive=True)
+    for child in children:
+        child.terminate()
+    parent.terminate()
+    gone, alive = psutil.wait_procs(children + [parent], timeout=5)
+    for p in alive:
+        p.kill()
+    killed = len(children)
+    print(f"ClaudeBot stopped (PID {bot_pid}" + (f", {killed} child process(es) also stopped" if killed else "") + ")")
 except psutil.NoSuchProcess:
     print(f"Process {bot_pid} not found, already stopped")
-except psutil.TimeoutExpired:
-    p.kill()
-    print(f"ClaudeBot force killed (PID {bot_pid})")
 finally:
     if os.path.exists(PID_FILE):
         os.remove(PID_FILE)
