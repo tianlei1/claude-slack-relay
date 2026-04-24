@@ -5,19 +5,16 @@ import platform
 import time
 os.environ["PYTHONUTF8"] = "1"
 
-from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from logger import get_logger
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import BOT_TOKEN, APP_TOKEN
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
 log = get_logger(__name__)
-
-BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
-
 app = App(token=BOT_TOKEN)
 
 SESSIONS_FILE = os.path.join(BASE_DIR, "sessions.json")
@@ -170,6 +167,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
                 pass
             last_update_time = now
 
+    had_output = True
     mark_processing_start(channel, status_ts)
     try:
         proc = subprocess.Popen(
@@ -210,6 +208,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
         proc.wait()
         if stderr_output:
             log.warning(f"claude stderr: {stderr_output[:200]}")
+        had_output = bool(final_result or current_text.strip())
         final_result = final_result or current_text.strip()
         if not final_result:
             final_result = f"Error: {stderr_output[:500]}" if stderr_output else "Done (no output)"
@@ -221,9 +220,9 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
     finally:
         mark_processing_done(channel, status_ts)
 
-    if is_error:
+    if is_error or not had_output:
         channel_sessions.pop(channel, None)
-        log.warning(f"Session error for channel {channel}, session cleared")
+        log.warning(f"Session cleared for channel {channel} ({'error' if is_error else 'no output'})")
     elif new_session_id:
         channel_sessions[channel] = new_session_id
     save_sessions(channel_sessions)

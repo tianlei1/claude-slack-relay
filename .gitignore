@@ -3,6 +3,7 @@ claudeBot.pid
 histories.json
 sessions.json
 in_progress.json
+config.py
 __pycache__/
 *.pyc
 .env
