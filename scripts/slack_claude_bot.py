@@ -288,6 +288,7 @@ def resolve_whitelist_user_id(client):
     global _whitelist_user_id
     if _whitelist_user_id:
         return _whitelist_user_id
+    log.info(f"Looking up Slack user by email: {ALLOWED_USER_EMAIL!r}")
     result = client.users_lookupByEmail(email=ALLOWED_USER_EMAIL)
     _whitelist_user_id = result["user"]["id"]
     return _whitelist_user_id
