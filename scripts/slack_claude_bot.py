@@ -13,7 +13,7 @@ from logger import get_logger
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_path = os.path.join(BASE_DIR, ".env")
-_env_loaded = load_dotenv(_env_path)
+_env_loaded = load_dotenv(_env_path, encoding='utf-8-sig')
 log = get_logger(__name__)
 log.info(f".env path: {_env_path} (loaded={_env_loaded})")
 
@@ -278,7 +278,7 @@ def lookup_ad_email():
     return None
 
 
-ALLOWED_USER_EMAIL = (os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email() or "").strip().lstrip('﻿') or None
+ALLOWED_USER_EMAIL = (os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email() or "").strip() or None
 if not ALLOWED_USER_EMAIL:
     log.error("ALLOWED_USER_EMAIL not set and AD lookup failed — bot will reject all messages. Set ALLOWED_USER_EMAIL in .env")
 else:
