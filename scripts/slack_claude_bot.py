@@ -61,11 +61,13 @@ def save_in_progress(data):
         log.error(f"Failed to save in_progress: {e}")
 
 
-def mark_processing_start(channel, ts, pid=None):
+def mark_processing_start(channel, ts, pid=None, label=None):
     data = load_in_progress()
     entry = {"channel": channel, "ts": ts}
     if pid is not None:
         entry["pid"] = pid
+    if label is not None:
+        entry["label"] = label
     data[f"{channel}|{ts}"] = entry
     save_in_progress(data)
 
@@ -177,8 +179,9 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
                 pass
             last_update_time = now
 
+    label = text[:40].strip()
     had_output = True
-    mark_processing_start(channel, status_ts)
+    mark_processing_start(channel, status_ts, label=label)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -187,8 +190,8 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
             text=True, encoding="utf-8", errors="replace",
             cwd=WORK_DIR
         )
-        mark_processing_start(channel, status_ts, proc.pid)
-        log.info(f"Claude subprocess started: PID {proc.pid}")
+        mark_processing_start(channel, status_ts, proc.pid, label=label)
+        log.info(f"Claude subprocess started: PID {proc.pid}, label='{label}'")
 
         for line in proc.stdout:
             line = line.strip()
