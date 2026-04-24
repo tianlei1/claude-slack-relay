@@ -7,13 +7,13 @@ Control your local Claude Code via Slack. Send development tasks from your phone
 - Chat with your local Claude Code through Slack, including from mobile
 - Live updates showing Claude's tool usage (file reads, command execution, etc.)
 - Conversation context is maintained per channel, supporting multi-turn dialogue
-- Send `!reset` to clear conversation history and start a new session
-- Only responds to the machine owner's AD account — other users' messages are ignored
+- Send `!reset` to clear conversation history, kill all running subprocesses, and start fresh
+- Only responds to the configured user — auto-detected from AD, or set manually in `.env`
 - On startup, detects any interrupted tasks and notifies you to resend
 
 ## Prerequisites
 
-- Windows, joined to an AD domain
+- Windows (domain-joined recommended for auto email detection, but not required)
 - Python 3.10+
 - [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` command must work in terminal)
 
@@ -102,6 +102,10 @@ Edit `.env` with your tokens:
 ```
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
+
+# Optional: set your Slack account email explicitly.
+# Required on machines not joined to an AD domain, or if AD mail attribute is not populated.
+ALLOWED_USER_EMAIL=your-email@example.com
 ```
 
 ## Usage
@@ -126,9 +130,11 @@ python scripts\stop.py
 python scripts\status.py
 ```
 
+Shows bot PID, memory, uptime, active tasks (with message label and claude subprocess info), and python child processes grouped per task.
+
 ### Using in Slack
 
 - Direct message ClaudeBot, or `@ClaudeBot` in a channel
 - Claude will show `Processing...` and update it with live tool call progress
 - The message is updated with the final result once complete
-- Send `!reset` to clear conversation history and start a new session
+- Send `!reset` to clear conversation history and kill all running python subprocesses
