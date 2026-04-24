@@ -301,6 +301,8 @@ def resolve_whitelist_user_id(client):
 def is_allowed_user(client, user_id):
     try:
         return user_id == resolve_whitelist_user_id(client)
+    except ValueError:
+        return False
     except Exception as e:
         log.error(f"Failed to resolve whitelist user: {e}")
         return False
