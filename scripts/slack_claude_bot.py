@@ -140,11 +140,13 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
     session_id = channel_sessions.get(channel)
     if session_id:
         cmd = ["claude", "--resume", session_id, "-p", text,
-               "--output-format", "stream-json", "--verbose"]
+               "--output-format", "stream-json", "--verbose",
+               "--dangerously-skip-permissions"]
         log.info(f"Resuming session {session_id} for channel {channel}")
     else:
         prompt = f"{build_system_context()}\n\n---\n\n{text}"
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--dangerously-skip-permissions"]
         log.info(f"Starting new session for channel {channel}")
 
     tool_steps = []
