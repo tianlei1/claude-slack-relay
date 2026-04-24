@@ -1,0 +1,134 @@
+# claude-slack-relay
+
+Control your local Claude Code via Slack. Send development tasks from your phone, watch the execution in real time, and receive results directly in Slack.
+
+## Features
+
+- Chat with your local Claude Code through Slack, including from mobile
+- Live updates showing Claude's tool usage (file reads, command execution, etc.)
+- Conversation context is maintained per channel, supporting multi-turn dialogue
+- Send `!reset` to clear conversation history and start a new session
+- Only responds to the machine owner's AD account — other users' messages are ignored
+- On startup, detects any interrupted tasks and notifies you to resend
+
+## Prerequisites
+
+- Windows, joined to an AD domain
+- Python 3.10+
+- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` command must work in terminal)
+
+## Setup
+
+### 1. Clone the repository
+
+```bat
+git clone https://github.com/tianlei1/claude-slack-relay.git C:\work\claude-slack-relay
+cd C:\work\claude-slack-relay
+```
+
+### 2. Install dependencies
+
+```bat
+pip install slack-bolt slack-sdk python-dotenv psutil
+```
+
+### 3. Get Slack Tokens
+
+There are two ways to set up the Slack tokens depending on your situation.
+
+---
+
+#### Option A: Create your own Slack App (standalone setup)
+
+Use this if you are setting up independently without a shared team app.
+
+**3.1 Create the App**
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
+2. Select **From scratch**
+3. Enter an App Name (e.g. `ClaudeBot`), select your Workspace, and click **Create App**
+
+**3.2 Configure Bot Permissions**
+
+1. In the left sidebar, click **OAuth & Permissions**
+2. Scroll to **Scopes** → **Bot Token Scopes**, click **Add an OAuth Scope**, and add:
+   - `chat:write` — send and update messages
+   - `im:history` — read direct message history
+   - `app_mentions:read` — receive @mention messages
+   - `users:read` — look up user information
+   - `users:read.email` — look up users by email
+
+**3.3 Enable Socket Mode and generate App Token**
+
+1. In the left sidebar, click **Socket Mode** and toggle **Enable Socket Mode** on
+2. In the dialog, enter a Token Name (e.g. `socket-token`) and click **Generate**
+3. Copy the **App Token** (`xapp-...`) and save it — it will not be shown again
+
+**3.4 Subscribe to Events**
+
+1. In the left sidebar, click **Event Subscriptions** and toggle **Enable Events** on
+2. Expand **Subscribe to bot events**, click **Add Bot User Event**, and add:
+   - `message.im` — receive direct messages
+   - `app_mention` — receive @mentions in channels
+3. Click **Save Changes**
+
+**3.5 Install to Workspace and get Bot Token**
+
+1. In the left sidebar, click **OAuth & Permissions**
+2. Scroll to the top and click **Install to Workspace**, then click **Allow**
+3. Copy the **Bot User OAuth Token** (`xoxb-...`)
+
+---
+
+#### Option B: Join a shared team app (recommended for teams)
+
+Use this if your team already has a shared Slack App (e.g. ClaudeBot). You only need to generate your own App Token — the Bot Token is provided by the app owner.
+
+**Why a separate App Token?** Each team member's bot must have its own dedicated Socket Mode connection so Slack routes your messages to your machine only. Sharing an App Token across multiple machines causes messages to be dropped.
+
+1. Ask the app owner to open [api.slack.com/apps](https://api.slack.com/apps) → the shared App → **Basic Information** → **App-Level Tokens**
+2. Click **Generate Token and Scopes**, enter your name as the Token Name, add the `connections:write` scope, and click **Generate**
+3. Copy the **App Token** (`xapp-...`) — it will not be shown again
+4. Get the **Bot Token** (`xoxb-...`) from the app owner
+
+### 4. Configure environment variables
+
+```bat
+copy .env.example .env
+```
+
+Edit `.env` with your tokens:
+
+```
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+```
+
+## Usage
+
+### Start
+
+```bat
+C:\work\claude-slack-relay\start.bat
+```
+
+The bot runs as a background process. Logs are written to `claudeBot.log`.
+
+### Stop
+
+```bat
+python scripts\stop.py
+```
+
+### Check status
+
+```bat
+python scripts\status.py
+```
+
+### Using in Slack
+
+- Direct message ClaudeBot, or `@ClaudeBot` in a channel
+- Claude will show `Processing...` and update it with live tool call progress
+- The message is updated with the final result once complete
+- Send `!reset` to clear conversation history and start a new session

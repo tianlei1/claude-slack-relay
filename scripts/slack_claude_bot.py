@@ -15,7 +15,6 @@ from config import BOT_TOKEN, APP_TOKEN
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log = get_logger(__name__)
-
 app = App(token=BOT_TOKEN)
 
 SESSIONS_FILE = os.path.join(BASE_DIR, "sessions.json")

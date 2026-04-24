@@ -6,3 +6,4 @@ in_progress.json
 config.py
 __pycache__/
 *.pyc
+.env
