@@ -57,13 +57,16 @@ def save_in_progress(data):
     try:
         with open(IN_PROGRESS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"Failed to save in_progress: {e}")
 
 
-def mark_processing_start(channel, ts):
+def mark_processing_start(channel, ts, pid=None):
     data = load_in_progress()
-    data[f"{channel}|{ts}"] = {"channel": channel, "ts": ts}
+    entry = {"channel": channel, "ts": ts}
+    if pid is not None:
+        entry["pid"] = pid
+    data[f"{channel}|{ts}"] = entry
     save_in_progress(data)
 
 
@@ -85,8 +88,8 @@ def notify_interrupted_requests():
                 ts=entry["ts"],
                 text="Bot restarted during processing. Please resend your message."
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to notify interrupted request {entry}: {e}")
     save_in_progress({})
     log.info(f"Notified {len(data)} interrupted request(s) after restart")
 
@@ -138,9 +141,11 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
     if session_id:
         cmd = ["claude", "--resume", session_id, "-p", text,
                "--output-format", "stream-json", "--verbose"]
+        log.info(f"Resuming session {session_id} for channel {channel}")
     else:
         prompt = f"{build_system_context()}\n\n---\n\n{text}"
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
+        log.info(f"Starting new session for channel {channel}")
 
     tool_steps = []
     current_text = ""
@@ -148,6 +153,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
     new_session_id = None
     is_error = False
     last_update_time = 0
+    start_time = time.time()
 
     def build_live_message():
         parts = []
@@ -179,6 +185,9 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
             text=True, encoding="utf-8", errors="replace",
             cwd=WORK_DIR
         )
+        mark_processing_start(channel, status_ts, proc.pid)
+        log.info(f"Claude subprocess started: PID {proc.pid}")
+
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -196,7 +205,9 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
                         inp = block.get("input", {})
                         first_val = next(iter(inp.values()), "") if inp else ""
                         summary = first_val[:60] if isinstance(first_val, str) else ""
-                        tool_steps.append(f"{name}: {summary}" if summary else name)
+                        step = f"{name}: {summary}" if summary else name
+                        tool_steps.append(step)
+                        log.info(f"Tool call: {step}")
                         throttled_update()
                     elif block.get("type") == "text":
                         current_text += block.get("text", "")
@@ -208,17 +219,25 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
 
         stderr_output = proc.stderr.read().strip()
         proc.wait()
+        elapsed = time.time() - start_time
+        log.info(f"Claude subprocess finished: PID {proc.pid}, exit code {proc.returncode}, elapsed {elapsed:.1f}s")
+
         if stderr_output:
-            log.warning(f"claude stderr: {stderr_output[:200]}")
+            log.warning(f"Claude stderr: {stderr_output[:200]}")
         had_output = bool(final_result or current_text.strip())
         final_result = final_result or current_text.strip()
         if not final_result:
             final_result = f"Error: {stderr_output[:500]}" if stderr_output else "Done (no output)"
 
+        if is_error:
+            log.error(f"Claude returned error: {final_result[:200]}")
+
     except FileNotFoundError:
         final_result = "claude command not found"
+        log.error("Claude subprocess failed: 'claude' command not found in PATH")
     except Exception as e:
         final_result = f"Error: {e}"
+        log.error(f"Claude subprocess exception: {e}")
     finally:
         mark_processing_done(channel, status_ts)
 
@@ -227,6 +246,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
         log.warning(f"Session cleared for channel {channel} ({'error' if is_error else 'no output'})")
     elif new_session_id:
         channel_sessions[channel] = new_session_id
+        log.info(f"Session saved: {new_session_id} for channel {channel}")
     save_sessions(channel_sessions)
 
     return final_result[:3000]
@@ -267,7 +287,8 @@ def resolve_whitelist_user_id(client):
 def is_allowed_user(client, user_id):
     try:
         return user_id == resolve_whitelist_user_id(client)
-    except Exception:
+    except Exception as e:
+        log.error(f"Failed to resolve whitelist user: {e}")
         return False
 
 
@@ -279,19 +300,53 @@ def process_slack_message(event, say, client):
     if len(processed_events) > 500:
         processed_events.clear()
 
-    if not is_allowed_user(client, event.get("user")):
+    user_id = event.get("user")
+    if not is_allowed_user(client, user_id):
+        log.warning(f"Rejected message from unauthorized user: {user_id}")
         return
     text = event.get("text", "").strip()
     if not text:
+        log.warning(f"Received empty message from user {user_id}, ignored")
         return
     log.info(f"Received: {text[:80]}")
 
     if text.lower() == "!reset":
         channel = event.get("channel")
+        self_pid = os.getpid()
+        killed = []
+        failed = []
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.strip().splitlines():
+                parts = line.strip('"').split('","')
+                if len(parts) >= 2:
+                    try:
+                        pid = int(parts[1])
+                        if pid != self_pid:
+                            r = subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                                               capture_output=True)
+                            if r.returncode == 0:
+                                killed.append(pid)
+                            else:
+                                failed.append(pid)
+                                log.warning(f"Failed to kill PID {pid}: {r.stderr.strip()}")
+                    except Exception as e:
+                        log.warning(f"Error processing PID entry '{line}': {e}")
+        except Exception as e:
+            log.warning(f"Failed to enumerate python processes: {e}")
+        save_in_progress({})
         channel_sessions.pop(channel, None)
         save_sessions(channel_sessions)
-        log.info(f"Session cleared for channel {channel}")
-        say("Conversation history cleared.")
+        msg = "Conversation history cleared."
+        if killed:
+            msg += f" Killed {len(killed)} python process(es): PID {', '.join(str(p) for p in killed)}."
+        if failed:
+            msg += f" Failed to kill PID(s): {', '.join(str(p) for p in failed)}."
+        log.info(f"Reset: session cleared, killed={killed}, failed={failed}")
+        say(msg)
         return
 
     resp = say("Processing... Please wait, this may take a moment.")
