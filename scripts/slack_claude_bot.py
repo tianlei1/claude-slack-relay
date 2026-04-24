@@ -12,8 +12,10 @@ from slack_sdk import WebClient
 from logger import get_logger
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+_env_path = os.path.join(BASE_DIR, ".env")
+_env_loaded = load_dotenv(_env_path)
 log = get_logger(__name__)
+log.info(f".env path: {_env_path} (loaded={_env_loaded})")
 
 BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
