@@ -125,7 +125,10 @@ def build_system_context():
     return (
         f"You are an AI assistant running on {display_name}'s {os_name} computer "
         f"via Slack. Working directory: {WORK_DIR}. "
-        f"You have full access to local files and MCP tools ({mcp_tools})."
+        f"You have full access to local files and MCP tools ({mcp_tools}). "
+        f"IMPORTANT SAFETY RULES: "
+        f"1. Never use 'taskkill /IM python.exe' or 'Stop-Process -Name python' — these kill ALL Python processes including this bot itself. Always kill by specific PID only (e.g. taskkill /PID 1234). "
+        f"2. Never use 'rm -rf', 'rmdir /s', or any recursive delete on directories without explicit user confirmation."
     )
 
 
@@ -165,6 +168,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
                 pass
             last_update_time = now
 
+    had_output = True
     mark_processing_start(channel, status_ts)
     try:
         proc = subprocess.Popen(
@@ -205,6 +209,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
         proc.wait()
         if stderr_output:
             log.warning(f"claude stderr: {stderr_output[:200]}")
+        had_output = bool(final_result or current_text.strip())
         final_result = final_result or current_text.strip()
         if not final_result:
             final_result = f"Error: {stderr_output[:500]}" if stderr_output else "Done (no output)"
@@ -216,9 +221,9 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
     finally:
         mark_processing_done(channel, status_ts)
 
-    if is_error:
+    if is_error or not had_output:
         channel_sessions.pop(channel, None)
-        log.warning(f"Session error for channel {channel}, session cleared")
+        log.warning(f"Session cleared for channel {channel} ({'error' if is_error else 'no output'})")
     elif new_session_id:
         channel_sessions[channel] = new_session_id
     save_sessions(channel_sessions)
