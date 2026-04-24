@@ -10,6 +10,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from logger import get_logger
+from mcp_manager import MCPServerManager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_path = os.path.join(BASE_DIR, ".env")
@@ -45,6 +46,9 @@ def save_sessions(sessions):
 channel_sessions = load_sessions()
 
 WORK_DIR = os.path.dirname(BASE_DIR)
+
+mcp_manager = MCPServerManager(os.path.join(WORK_DIR, ".mcp.json"))
+mcp_manager.start()
 
 
 def load_in_progress():
@@ -142,15 +146,16 @@ def build_system_context():
 
 def ask_claude_and_update_reply(channel, text, client, status_ts):
     session_id = channel_sessions.get(channel)
+    mcp_args = mcp_manager.get_mcp_args()
     if session_id:
         cmd = ["claude", "--resume", session_id, "-p", text,
                "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions"]
+               "--dangerously-skip-permissions"] + mcp_args
         log.info(f"Resuming session {session_id} for channel {channel}")
     else:
         prompt = f"{build_system_context()}\n\n---\n\n{text}"
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions"]
+               "--dangerously-skip-permissions"] + mcp_args
         log.info(f"Starting new session for channel {channel}")
 
     tool_steps = []
