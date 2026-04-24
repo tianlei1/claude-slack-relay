@@ -278,7 +278,7 @@ def lookup_ad_email():
     return None
 
 
-ALLOWED_USER_EMAIL = os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email()
+ALLOWED_USER_EMAIL = (os.environ.get("ALLOWED_USER_EMAIL") or lookup_ad_email() or "").strip().lstrip('﻿') or None
 if not ALLOWED_USER_EMAIL:
     log.error("ALLOWED_USER_EMAIL not set and AD lookup failed — bot will reject all messages. Set ALLOWED_USER_EMAIL in .env")
 else:
