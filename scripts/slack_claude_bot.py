@@ -304,6 +304,7 @@ def resolve_whitelist_user_id(client):
     log.info(f"Looking up Slack user by email: {ALLOWED_USER_EMAIL!r}")
     result = client.users_lookupByEmail(email=ALLOWED_USER_EMAIL)
     _whitelist_user_id = result["user"]["id"]
+    log.info(f"Whitelist user ID resolved: {_whitelist_user_id}")
     return _whitelist_user_id
 
 
@@ -402,5 +403,9 @@ def on_app_mention(event, say, client):
 
 if __name__ == "__main__":
     log.info("ClaudeBot starting...")
+    try:
+        resolve_whitelist_user_id(app.client)
+    except Exception as e:
+        log.error(f"Failed to resolve whitelist user at startup: {e}")
     notify_interrupted_requests()
     SocketModeHandler(app, APP_TOKEN).start()
