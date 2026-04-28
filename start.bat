@@ -1,9 +1,5 @@
 @echo off
-echo Stopping any existing ClaudeBot...
-python "%~dp0scripts\stop.py" 2>nul
-timeout /t 2 /nobreak >nul
-
-echo Starting ClaudeBot watchdog...
+echo Starting ClaudeBot...
 set BASE_DIR=%~dp0
 
 :: 防止屏幕锁屏

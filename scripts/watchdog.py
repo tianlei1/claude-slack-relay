@@ -86,6 +86,18 @@ def start_bot() -> subprocess.Popen:
 
 # ── startup ──────────────────────────────────────────────────────────────────
 
+# Kill any existing watchdog instance (and its bot/children)
+if os.path.exists(PID_FILE):
+    try:
+        with open(PID_FILE) as f:
+            old_pid = int(f.read().strip())
+        if old_pid != os.getpid():
+            log.info(f"Existing instance found (PID {old_pid}), terminating...")
+            kill_process_tree(old_pid, "replaced by new instance")
+            time.sleep(2)
+    except Exception:
+        pass
+
 if os.path.exists(STOP_FLAG):
     os.remove(STOP_FLAG)
 
