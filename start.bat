@@ -1,5 +1,16 @@
 @echo off
-echo Starting ClaudeBot...
+echo Stopping any existing ClaudeBot...
+python "%~dp0scripts\stop.py" 2>nul
+timeout /t 2 /nobreak >nul
+
+echo Starting ClaudeBot watchdog...
 set BASE_DIR=%~dp0
-powershell -Command "$p = Start-Process -FilePath 'python' -ArgumentList @('-u', '%BASE_DIR%scripts\slack_claude_bot.py') -WindowStyle Hidden -PassThru; $p.Id | Out-File -FilePath '%BASE_DIR%claudeBot.pid' -Encoding ascii -NoNewline"
+
+:: 防止屏幕锁屏
+powercfg /change monitor-timeout-ac 0 >nul 2>&1
+powercfg /change standby-timeout-ac 0 >nul 2>&1
+reg add "HKCU\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f >nul 2>&1
+reg add "HKCU\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f >nul 2>&1
+
+powershell -Command "Start-Process -FilePath 'python' -ArgumentList @('-u', '%BASE_DIR%scripts\watchdog.py') -WindowStyle Hidden"
 echo ClaudeBot started.

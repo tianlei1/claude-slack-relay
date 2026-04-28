@@ -4,7 +4,12 @@ import psutil
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PID_FILE = os.path.join(BASE_DIR, "claudeBot.pid")
+STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 BOT_SCRIPT = os.path.join(BASE_DIR, "scripts", "slack_claude_bot.py")
+
+# Signal watchdog not to restart
+with open(STOP_FLAG, "w") as f:
+    f.write("stop")
 
 self_pid = os.getpid()
 to_kill = set()
