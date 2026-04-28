@@ -3,6 +3,7 @@ import io
 import os
 import subprocess
 import time
+import winreg
 
 import pyautogui
 import win32api
@@ -20,34 +21,58 @@ mcp = FastMCP("computer-use")
 
 # ── Browser (Selenium) ────────────────────────────────────────────────────────
 
-CHROME_PATHS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+EDGE_DEBUG_PORT = 9222
+EDGE_PROFILE_DIR = r"C:\temp\selenium_edge"
+_EDGE_FALLBACK_PATHS = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
 ]
-CHROME_DEBUG_PORT = 9222
+
+
+def _find_edge_exe():
+    reg_keys = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+    ]
+    for key_path in reg_keys:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as k:
+                path, _ = winreg.QueryValueEx(k, "")
+                if os.path.exists(path):
+                    return path
+        except OSError:
+            pass
+    for path in _EDGE_FALLBACK_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def _get_driver():
-    """Connect to existing Chrome debug session, or start Chrome with debug port."""
+    """Connect to existing Edge debug session, or start a new Edge with debug port.
+    Uses a separate user-data-dir so it doesn't conflict with an already-running Edge."""
     from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.edge.options import Options
 
-    options = Options()
-    options.add_experimental_option("debuggerAddress", f"127.0.0.1:{CHROME_DEBUG_PORT}")
-    options.add_argument("--no-sandbox")
+    attach_options = Options()
+    attach_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{EDGE_DEBUG_PORT}")
     try:
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Edge(options=attach_options)
         return driver
     except Exception:
-        # Chrome not running with debug port — start it
-        for path in CHROME_PATHS:
-            if os.path.exists(path):
-                subprocess.Popen([path, f"--remote-debugging-port={CHROME_DEBUG_PORT}"])
-                time.sleep(2.5)
-                break
-        else:
-            raise RuntimeError("Chrome not found. Install Chrome or start it manually with --remote-debugging-port=9222")
-        return webdriver.Chrome(options=options)
+        pass
+
+    # Start a fresh Edge with debug port (separate profile — won't affect existing Edge)
+    edge_exe = _find_edge_exe()
+    if not edge_exe:
+        raise RuntimeError("Edge not found. Install Microsoft Edge.")
+    subprocess.Popen([
+        edge_exe,
+        f"--remote-debugging-port={EDGE_DEBUG_PORT}",
+        f"--user-data-dir={EDGE_PROFILE_DIR}",
+    ])
+    time.sleep(2.5)
+    return webdriver.Edge(options=attach_options)
 
 
 def _by(by: str):
@@ -346,4 +371,21 @@ def wait(seconds: float) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    import sys
+    transport = "stdio"
+    port = 8000
+    host = "127.0.0.1"
+    args = sys.argv[1:]
+    for i, arg in enumerate(args):
+        if arg == "--transport" and i + 1 < len(args):
+            transport = args[i + 1]
+        elif arg == "--port" and i + 1 < len(args):
+            port = int(args[i + 1])
+        elif arg == "--host" and i + 1 < len(args):
+            host = args[i + 1]
+    if transport == "sse":
+        mcp.settings.port = port
+        mcp.settings.host = host
+        mcp.run(transport="sse")
+    else:
+        mcp.run(transport="stdio")

@@ -1,11 +1,14 @@
 import os
 import re
 import subprocess
+import sys
 import json
+import glob
 import platform
 import tempfile
 import time
 import requests
+import psutil
 os.environ["PYTHONUTF8"] = "1"
 
 from dotenv import load_dotenv
@@ -28,7 +31,18 @@ app = App(token=BOT_TOKEN)
 
 SESSIONS_FILE = os.path.join(BASE_DIR, "sessions.json")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
+PIDS_DIR = os.path.join(BASE_DIR, "pids")
+BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
+WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
+WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 processed_events = set()
+
+
+def read_pid(path):
+    try:
+        return int(open(path).read().strip())
+    except Exception:
+        return None
 
 
 def load_sessions():
@@ -52,7 +66,6 @@ channel_sessions = load_sessions()
 WORK_DIR = os.path.dirname(BASE_DIR)
 
 mcp_manager = MCPServerManager(os.path.join(WORK_DIR, ".mcp.json"))
-mcp_manager.start()
 
 
 def load_in_progress():
@@ -412,6 +425,17 @@ def process_slack_message(event, say, client):
     if text.lower() == "!reset":
         channel = event.get("channel")
         self_pid = os.getpid()
+        # Collect PIDs to preserve: self, watchdog, and all MCP servers
+        protected_pids = {self_pid}
+        pid = read_pid(WATCHDOG_PID_FILE)
+        if pid:
+            protected_pids.add(pid)
+        if os.path.exists(PIDS_DIR):
+            for fname in os.listdir(PIDS_DIR):
+                if fname.startswith("mcp_") and fname.endswith(".pid"):
+                    pid = read_pid(os.path.join(PIDS_DIR, fname))
+                    if pid:
+                        protected_pids.add(pid)
         killed = []
         failed = []
         try:
@@ -424,7 +448,7 @@ def process_slack_message(event, say, client):
                 if len(parts) >= 2:
                     try:
                         pid = int(parts[1])
-                        if pid != self_pid:
+                        if pid not in protected_pids:
                             r = subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                                                capture_output=True)
                             if r.returncode == 0:
@@ -444,6 +468,25 @@ def process_slack_message(event, say, client):
             msg += f" Killed {len(killed)} python process(es): PID {', '.join(str(p) for p in killed)}."
         if failed:
             msg += f" Failed to kill PID(s): {', '.join(str(p) for p in failed)}."
+        try:
+            log_file = os.path.join(BASE_DIR, "claudeBot.log")
+            with open(log_file, "w"):
+                pass
+            msg += " Log cleared."
+        except Exception as e:
+            log.warning(f"Failed to clear log: {e}")
+        screen_dir = os.path.join(BASE_DIR, "screen")
+        try:
+            png_files = glob.glob(os.path.join(screen_dir, "*.png"))
+            for f in png_files:
+                try:
+                    os.remove(f)
+                except Exception as e:
+                    log.warning(f"Failed to delete screenshot {f}: {e}")
+            if png_files:
+                msg += f" Deleted {len(png_files)} screenshot(s)."
+        except Exception as e:
+            log.warning(f"Failed to clean screen dir: {e}")
         log.info(f"Reset: session cleared, killed={killed}, failed={failed}")
         say(msg)
         return
@@ -476,9 +519,36 @@ def on_app_mention(event, say, client):
     process_slack_message(event, say, client)
 
 
+def _start_watchdog_if_needed():
+    try:
+        pid = read_pid(WATCHDOG_PID_FILE)
+        if pid and psutil.pid_exists(pid):
+            log.info(f"Watchdog already running (PID {pid})")
+            return
+    except Exception:
+        pass
+    proc = subprocess.Popen(
+        [sys.executable, "-u", WATCHDOG_SCRIPT],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    log.info(f"Watchdog started (PID {proc.pid})")
+
+
 if __name__ == "__main__":
-    log.info("ClaudeBot starting...")
+    os.makedirs(PIDS_DIR, exist_ok=True)
+    with open(BOT_PID_FILE, "w") as _f:
+        _f.write(str(os.getpid()))
+    log.info(f"Bot PID {os.getpid()} written")
+
     heartbeat.start()
+    _start_watchdog_if_needed()
+    mcp_manager.start()
+
+    log.info("ClaudeBot starting...")
     try:
         resolve_whitelist_user_id(app.client)
     except Exception as e:

@@ -5,64 +5,120 @@ import json
 import psutil
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PID_FILE = os.path.join(BASE_DIR, "claudeBot.pid")
-LOG_FILE = os.path.join(BASE_DIR, "claudeBot.log")
+PIDS_DIR = os.path.join(BASE_DIR, "pids")
+BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
+WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
 HEARTBEAT_FILE = os.path.join(BASE_DIR, "heartbeat.json")
+RUNTIME_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.runtime.json")
+MCP_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.json")
+IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 
-# ── Watchdog status ───────────────────────────────────────────────────────────
 
-if not os.path.exists(PID_FILE):
-    print("[STATUS] Watchdog is NOT running (no PID file)")
-    sys.exit(1)
+def read_pid(path):
+    try:
+        return int(open(path).read().strip())
+    except Exception:
+        return None
 
-with open(PID_FILE) as f:
-    watchdog_pid = int(f.read().strip())
 
-try:
-    wp = psutil.Process(watchdog_pid)
-    w_mem = round(wp.memory_info().rss / 1024 / 1024, 1)
-    w_uptime = round((datetime.datetime.now().timestamp() - wp.create_time()) / 60, 1)
-    print(f"[STATUS] Watchdog RUNNING")
-    print(f"         PID     : {watchdog_pid}")
-    print(f"         Memory  : {w_mem} MB")
-    print(f"         Uptime  : {w_uptime} min")
-except psutil.NoSuchProcess:
-    print(f"[STATUS] Watchdog NOT running (PID {watchdog_pid} not found)")
-    os.remove(PID_FILE)
-    sys.exit(1)
+def proc_info(pid):
+    if pid is None:
+        return None
+    try:
+        p = psutil.Process(pid)
+        mem = round(p.memory_info().rss / 1024 / 1024, 1)
+        uptime = round((datetime.datetime.now().timestamp() - p.create_time()) / 60, 1)
+        return p, mem, uptime
+    except psutil.NoSuchProcess:
+        return None
 
-# ── Bot heartbeat ─────────────────────────────────────────────────────────────
+
+# ── Watchdog ──────────────────────────────────────────────────────────────────
+
+watchdog_pid = read_pid(WATCHDOG_PID_FILE)
+info = proc_info(watchdog_pid)
+if info:
+    _, mem, uptime = info
+    print(f"[WATCHDOG]  PID {watchdog_pid}  mem={mem}MB  uptime={uptime}min")
+else:
+    print(f"[WATCHDOG]  NOT running" + (f" (PID {watchdog_pid} not found)" if watchdog_pid else ""))
+
+# ── Bot ───────────────────────────────────────────────────────────────────────
 
 print()
-print("[BOT HEARTBEAT]")
+bot_pid = read_pid(BOT_PID_FILE)
+info = proc_info(bot_pid)
+if info:
+    _, mem, uptime = info
+    print(f"[BOT]  PID {bot_pid}  mem={mem}MB  uptime={uptime}min")
+else:
+    print(f"[BOT]  NOT running" + (f" (PID {bot_pid} not found)" if bot_pid else ""))
+
+# ── Bot heartbeat ──────────────────────────────────────────────────────────────
+
 try:
     with open(HEARTBEAT_FILE, encoding="utf-8") as f:
         hb = json.load(f)
     age = datetime.datetime.now().timestamp() - hb["ts"]
-    bot_pid = hb.get("pid")
     status = "OK" if age <= 30 else f"STALE ({age:.0f}s ago)"
-    print(f"  Last beat : {age:.0f}s ago  [{status}]")
-    if bot_pid:
-        try:
-            bp = psutil.Process(bot_pid)
-            b_mem = round(bp.memory_info().rss / 1024 / 1024, 1)
-            b_uptime = round((datetime.datetime.now().timestamp() - bp.create_time()) / 60, 1)
-            print(f"  Bot PID   : {bot_pid}  mem={b_mem}MB  uptime={b_uptime}min")
-        except psutil.NoSuchProcess:
-            print(f"  Bot PID   : {bot_pid}  (not found)")
+    print(f"  Heartbeat : {age:.0f}s ago  [{status}]")
 except FileNotFoundError:
-    print("  No heartbeat file — bot may not have started yet")
+    print("  Heartbeat : no file")
 except Exception as e:
-    print(f"  Error reading heartbeat: {e}")
+    print(f"  Heartbeat : error ({e})")
 
-# ── Active tasks ──────────────────────────────────────────────────────────────
+# ── Active tasks ───────────────────────────────────────────────────────────────
 
-IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 try:
     with open(IN_PROGRESS_FILE, encoding="utf-8") as f:
         in_progress = json.load(f)
 except Exception:
     in_progress = {}
+
+print()
+print(f"[ACTIVE TASKS]  {len(in_progress)}")
+for entry in in_progress.values():
+    pid = entry.get("pid")
+    channel = entry["channel"]
+    label = entry.get("label", "")
+    label_str = f'"{label}"' if label else "(no label)"
+    print(f"  {label_str}  channel={channel}", end="")
+    if pid:
+        try:
+            p = psutil.Process(pid)
+            mem = round(p.memory_info().rss / 1024 / 1024, 1)
+            print(f"  PID {pid}  mem={mem}MB  status={p.status()}")
+        except psutil.NoSuchProcess:
+            print(f"  PID {pid}  (exited)")
+    else:
+        print("  (starting...)")
+
+# ── MCP servers ────────────────────────────────────────────────────────────────
+
+print()
+print("[MCP SERVERS]")
+cfg_path = RUNTIME_CONFIG if os.path.exists(RUNTIME_CONFIG) else MCP_CONFIG
+try:
+    with open(cfg_path, encoding="utf-8") as f:
+        mcp_config = json.load(f)
+    for name, cfg in mcp_config.get("mcpServers", {}).items():
+        if "url" in cfg:
+            pid = cfg.get("pid")
+            info = proc_info(pid)
+            if info:
+                _, mem, uptime = info
+                state = f"RUNNING  PID {pid}  mem={mem}MB  uptime={uptime}min"
+            else:
+                state = f"DEAD (PID {pid})"
+            print(f"  {name:<16} SSE  {cfg['url']}  {state}")
+        else:
+            print(f"  {name:<16} stdio (per-request)")
+except Exception:
+    print("  (could not read MCP config)")
+
+# ── Python processes ───────────────────────────────────────────────────────────
+
+self_pid = os.getpid()
 
 
 def derive_process_name(cmdline):
@@ -89,65 +145,6 @@ def derive_process_name(cmdline):
             return os.path.basename(part)
     return cmdline[1] if len(cmdline) > 1 else "python"
 
-
-def get_python_children(pid):
-    results = []
-    try:
-        for child in psutil.Process(pid).children(recursive=True):
-            try:
-                if child.name().lower() == "python.exe":
-                    cmdline = child.cmdline()
-                    mem = round(child.memory_info().rss / 1024 / 1024, 1)
-                    results.append((child.pid, derive_process_name(cmdline), mem, child.status()))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
-    return results
-
-
-self_pid = os.getpid()
-
-print()
-print(f"[ACTIVE TASKS]  {len(in_progress)}")
-for entry in in_progress.values():
-    pid = entry.get("pid")
-    channel = entry["channel"]
-    label = entry.get("label", "")
-    label_str = f'"{label}"' if label else "(no label)"
-    print()
-    print(f"  Task: {label_str}")
-    if pid:
-        try:
-            cp = psutil.Process(pid)
-            mem = round(cp.memory_info().rss / 1024 / 1024, 1)
-            print(f"    claude PID {pid}  mem={mem}MB  status={cp.status()}  channel={channel}")
-            children = get_python_children(pid)
-            if children:
-                print(f"    {'PID':<8} {'Name':<28} {'Mem(MB)':>8}  Status")
-                print(f"    {'-'*8} {'-'*28} {'-'*8}  {'-'*10}")
-                for cpid, cname, cmem, cstatus in children:
-                    print(f"    {cpid:<8} {cname:<28} {cmem:>8.1f}  {cstatus}")
-        except psutil.NoSuchProcess:
-            print(f"    claude PID {pid}  (already exited)  channel={channel}")
-    else:
-        print(f"    channel={channel}  (starting...)")
-
-# ── MCP servers (all stdio) ───────────────────────────────────────────────────
-
-WORK_DIR = os.path.dirname(BASE_DIR)
-mcp_config_path = os.path.join(WORK_DIR, ".mcp.json")
-print()
-print("[MCP SERVERS]  stdio (per-request)")
-try:
-    with open(mcp_config_path, encoding="utf-8") as f:
-        mcp_config = json.load(f)
-    for name in mcp_config.get("mcpServers", {}):
-        print(f"  {name}")
-except Exception:
-    print("  (could not read .mcp.json)")
-
-# ── Python processes ──────────────────────────────────────────────────────────
 
 print()
 print("[PYTHON PROCESSES]")

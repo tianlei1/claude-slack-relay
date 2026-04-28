@@ -3,9 +3,8 @@ import sys
 import psutil
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PID_FILE = os.path.join(BASE_DIR, "claudeBot.pid")
+PIDS_DIR = os.path.join(BASE_DIR, "pids")
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
-BOT_SCRIPT = os.path.join(BASE_DIR, "scripts", "slack_claude_bot.py")
 
 # Signal watchdog not to restart
 with open(STOP_FLAG, "w") as f:
@@ -14,9 +13,19 @@ with open(STOP_FLAG, "w") as f:
 self_pid = os.getpid()
 to_kill = set()
 
-BOT_KEYWORDS = ("slack_claude_bot", "watchdog")
+# Collect PIDs from all PID files
+if os.path.exists(PIDS_DIR):
+    for fname in os.listdir(PIDS_DIR):
+        if fname.endswith(".pid"):
+            try:
+                pid = int(open(os.path.join(PIDS_DIR, fname)).read().strip())
+                if pid != self_pid:
+                    to_kill.add(pid)
+            except Exception:
+                pass
 
-# Find all python processes belonging to the bot or watchdog
+BOT_KEYWORDS = ["slack_claude_bot", "watchdog"]
+
 for proc in psutil.process_iter(["pid", "name", "cmdline"]):
     try:
         if proc.pid == self_pid:
@@ -30,25 +39,8 @@ for proc in psutil.process_iter(["pid", "name", "cmdline"]):
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
-# Also check PID file as fallback
-if os.path.exists(PID_FILE):
-    try:
-        with open(PID_FILE) as f:
-            pid = int(f.read().strip())
-        if pid != self_pid:
-            to_kill.add(pid)
-            try:
-                for child in psutil.Process(pid).children(recursive=True):
-                    to_kill.add(child.pid)
-            except psutil.NoSuchProcess:
-                pass
-    except Exception:
-        pass
-
 if not to_kill:
     print("ClaudeBot is not running")
-    if os.path.exists(PID_FILE):
-        os.remove(PID_FILE)
     sys.exit(0)
 
 procs = []
@@ -71,7 +63,13 @@ for p in alive:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
-if os.path.exists(PID_FILE):
-    os.remove(PID_FILE)
+# Clean up PID files
+if os.path.exists(PIDS_DIR):
+    for fname in os.listdir(PIDS_DIR):
+        if fname.endswith(".pid"):
+            try:
+                os.remove(os.path.join(PIDS_DIR, fname))
+            except Exception:
+                pass
 
 print(f"ClaudeBot stopped ({len(to_kill)} process(es) killed)")
