@@ -10,6 +10,8 @@ Control your local Claude Code via Slack. Send development tasks from your phone
 - Send `!reset` to clear conversation history, kill all running subprocesses, and start fresh
 - Only responds to the configured user — auto-detected from AD, or set manually in `.env`
 - On startup, detects any interrupted tasks and notifies you to resend
+- Watchdog process automatically restarts the bot if it crashes or stops responding
+- MCP tools start on-demand per request and exit when done (no persistent background servers)
 
 ## Prerequisites
 
@@ -29,7 +31,7 @@ cd C:\work\claude-slack-relay
 ### 2. Install dependencies
 
 ```bat
-pip install slack-bolt slack-sdk python-dotenv psutil
+pip install slack-bolt slack-sdk python-dotenv psutil requests
 ```
 
 ### 3. Get Slack Tokens
@@ -108,6 +110,29 @@ SLACK_APP_TOKEN=xapp-your-app-token
 ALLOWED_USER_EMAIL=your-email@example.com
 ```
 
+### 5. Configure MCP tools (optional)
+
+MCP tools are configured in `C:\work\.mcp.json`. All tools run in **stdio (per-request)** mode — they start when Claude needs them and exit automatically when the request is done. No persistent background servers are required.
+
+Example configuration:
+
+```json
+{
+  "mcpServers": {
+    "jira": {
+      "command": "mcp-atlassian",
+      "args": [],
+      "env": {
+        "JIRA_URL": "https://your-jira.example.com",
+        "JIRA_PERSONAL_TOKEN": "your-token"
+      }
+    }
+  }
+}
+```
+
+> **Note:** The MCP config file lives at `C:\work\.mcp.json` (one level above this repo), so it is shared across projects and not checked into version control.
+
 ## Usage
 
 ### Start
@@ -116,7 +141,7 @@ ALLOWED_USER_EMAIL=your-email@example.com
 C:\work\claude-slack-relay\start.bat
 ```
 
-The bot runs as a background process. Logs are written to `claudeBot.log`.
+`start.bat` first stops any running instance, then launches a **watchdog** process in the background. The watchdog starts the bot, monitors it every 10 seconds, and automatically restarts it if it crashes or stops responding (heartbeat timeout: 30 seconds). Logs are written to `claudeBot.log`; watchdog events are written to `watchdog.log`.
 
 ### Stop
 
@@ -124,13 +149,15 @@ The bot runs as a background process. Logs are written to `claudeBot.log`.
 python scripts\stop.py
 ```
 
+Signals the watchdog not to restart, then terminates the bot and all its child processes.
+
 ### Check status
 
 ```bat
 python scripts\status.py
 ```
 
-Shows bot PID, memory, uptime, active tasks (with message label and claude subprocess info), and python child processes grouped per task.
+Shows bot PID, memory, uptime, active tasks (with message label and claude subprocess info), MCP server status, and all Python child processes.
 
 ### Using in Slack
 
@@ -138,3 +165,24 @@ Shows bot PID, memory, uptime, active tasks (with message label and claude subpr
 - Claude will show `Processing...` and update it with live tool call progress
 - The message is updated with the final result once complete
 - Send `!reset` to clear conversation history and kill all running python subprocesses
+
+## Process architecture
+
+```
+start.bat
+  └── watchdog.py          (monitors heartbeat, restarts on crash)
+        └── slack_claude_bot.py   (bot main process, writes heartbeat every 10s)
+              └── claude ...      (per-request Claude subprocess)
+                    └── mcp servers  (started on-demand by Claude, exit when done)
+```
+
+## Files
+
+| File | Description |
+|---|---|
+| `claudeBot.log` | Bot log (overwritten on each start) |
+| `watchdog.log` | Watchdog restart/event log (append) |
+| `claudeBot.pid` | PID of the watchdog process |
+| `heartbeat.json` | Updated every 10s by the bot; watchdog uses this to detect hangs |
+| `sessions.json` | Conversation session IDs per Slack channel |
+| `in_progress.json` | Tasks in progress (used to notify on restart) |
