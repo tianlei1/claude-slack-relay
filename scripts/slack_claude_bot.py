@@ -36,6 +36,7 @@ BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
 WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 processed_events = set()
+STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 
 
 def read_pid(path):
@@ -271,7 +272,8 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace",
-            cwd=WORK_DIR
+            cwd=WORK_DIR,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         mark_processing_start(channel, status_ts, proc.pid, label=label)
         log.info(f"Claude subprocess started: PID {proc.pid}, label='{label}'")
@@ -422,8 +424,8 @@ def process_slack_message(event, say, client):
         text = "请分析这张图片"
     log.info(f"Received: {text[:80]}" + (f" + {len(image_paths)} image(s)" if image_paths else ""))
 
+    channel = event.get("channel")
     if text.lower() == "!reset":
-        channel = event.get("channel")
         self_pid = os.getpid()
         # Collect PIDs to preserve: self, watchdog, and all MCP servers
         protected_pids = {self_pid}
@@ -491,9 +493,14 @@ def process_slack_message(event, say, client):
         say(msg)
         return
 
+    in_progress = load_in_progress()
+    if any(v["channel"] == channel for v in in_progress.values()):
+        say("Previous message is still being processed. Please wait.")
+        log.info(f"Rejected concurrent request for channel {channel}")
+        return
+
     resp = say("Processing... Please wait, this may take a moment.")
     status_ts = resp.get("ts")
-    channel = event.get("channel")
     result = ask_claude_and_update_reply(channel, text, client, status_ts, image_paths)
     result = upload_images_to_slack(result, channel, client)
     try:
@@ -543,6 +550,11 @@ if __name__ == "__main__":
     with open(BOT_PID_FILE, "w") as _f:
         _f.write(str(os.getpid()))
     log.info(f"Bot PID {os.getpid()} written")
+    try:
+        os.remove(STOP_FLAG)
+        log.info("Cleared stale stop flag")
+    except FileNotFoundError:
+        pass
 
     heartbeat.start()
     _start_watchdog_if_needed()
