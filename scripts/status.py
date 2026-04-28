@@ -7,29 +7,55 @@ import psutil
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PID_FILE = os.path.join(BASE_DIR, "claudeBot.pid")
 LOG_FILE = os.path.join(BASE_DIR, "claudeBot.log")
+HEARTBEAT_FILE = os.path.join(BASE_DIR, "heartbeat.json")
+
+# ── Watchdog status ───────────────────────────────────────────────────────────
 
 if not os.path.exists(PID_FILE):
-    print("[STATUS] ClaudeBot is NOT running (no PID file)")
+    print("[STATUS] Watchdog is NOT running (no PID file)")
     sys.exit(1)
 
 with open(PID_FILE) as f:
-    bot_pid = int(f.read().strip())
+    watchdog_pid = int(f.read().strip())
 
 try:
-    p = psutil.Process(bot_pid)
-    mem = round(p.memory_info().rss / 1024 / 1024, 1)
-    cpu = round(sum(p.cpu_times()[:2]), 1)
-    uptime = round((datetime.datetime.now().timestamp() - p.create_time()) / 60, 1)
-    print(f"[STATUS] ClaudeBot is RUNNING")
-    print(f"        PID     : {bot_pid}")
-    print(f"        Memory  : {mem} MB")
-    print(f"        CPU     : {cpu} s")
-    print(f"        Uptime  : {uptime} min")
-    print(f"        Log     : {LOG_FILE}")
+    wp = psutil.Process(watchdog_pid)
+    w_mem = round(wp.memory_info().rss / 1024 / 1024, 1)
+    w_uptime = round((datetime.datetime.now().timestamp() - wp.create_time()) / 60, 1)
+    print(f"[STATUS] Watchdog RUNNING")
+    print(f"         PID     : {watchdog_pid}")
+    print(f"         Memory  : {w_mem} MB")
+    print(f"         Uptime  : {w_uptime} min")
 except psutil.NoSuchProcess:
-    print(f"[STATUS] ClaudeBot is NOT running (process {bot_pid} not found)")
+    print(f"[STATUS] Watchdog NOT running (PID {watchdog_pid} not found)")
     os.remove(PID_FILE)
     sys.exit(1)
+
+# ── Bot heartbeat ─────────────────────────────────────────────────────────────
+
+print()
+print("[BOT HEARTBEAT]")
+try:
+    with open(HEARTBEAT_FILE, encoding="utf-8") as f:
+        hb = json.load(f)
+    age = datetime.datetime.now().timestamp() - hb["ts"]
+    bot_pid = hb.get("pid")
+    status = "OK" if age <= 30 else f"STALE ({age:.0f}s ago)"
+    print(f"  Last beat : {age:.0f}s ago  [{status}]")
+    if bot_pid:
+        try:
+            bp = psutil.Process(bot_pid)
+            b_mem = round(bp.memory_info().rss / 1024 / 1024, 1)
+            b_uptime = round((datetime.datetime.now().timestamp() - bp.create_time()) / 60, 1)
+            print(f"  Bot PID   : {bot_pid}  mem={b_mem}MB  uptime={b_uptime}min")
+        except psutil.NoSuchProcess:
+            print(f"  Bot PID   : {bot_pid}  (not found)")
+except FileNotFoundError:
+    print("  No heartbeat file — bot may not have started yet")
+except Exception as e:
+    print(f"  Error reading heartbeat: {e}")
+
+# ── Active tasks ──────────────────────────────────────────────────────────────
 
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 try:
@@ -44,18 +70,18 @@ def derive_process_name(cmdline):
         part_lower = part.lower()
         if "slack_claude_bot" in part_lower:
             return "ClaudeBot (bot)"
+        if "watchdog" in part_lower:
+            return "watchdog"
         if "status.py" in part_lower:
             return "status check"
         if "stop.py" in part_lower:
             return "stop script"
         if "mcp-atlassian" in part_lower:
-            return "MCP Atlassian server"
+            return "MCP Atlassian"
         if "mcp_manager" in part_lower:
             return "MCP manager"
     if any("scons" in c.lower() for c in cmdline):
         return "SCons build worker"
-    if any("sconstruct" in c.lower() for c in cmdline):
-        return "SCons build"
     if any("msbuild" in c.lower() for c in cmdline):
         return "MSBuild"
     for part in reversed(cmdline):
@@ -82,62 +108,47 @@ def get_python_children(pid):
 
 self_pid = os.getpid()
 
-print(f"        Active Tasks: {len(in_progress)}")
+print()
+print(f"[ACTIVE TASKS]  {len(in_progress)}")
 for entry in in_progress.values():
     pid = entry.get("pid")
     channel = entry["channel"]
     label = entry.get("label", "")
     label_str = f'"{label}"' if label else "(no label)"
     print()
-    print(f"          Task: {label_str}")
+    print(f"  Task: {label_str}")
     if pid:
         try:
             cp = psutil.Process(pid)
             mem = round(cp.memory_info().rss / 1024 / 1024, 1)
-            status = cp.status()
-            print(f"            claude PID {pid}  mem={mem}MB  status={status}  channel={channel}")
+            print(f"    claude PID {pid}  mem={mem}MB  status={cp.status()}  channel={channel}")
             children = get_python_children(pid)
             if children:
-                print(f"            {'PID':<8} {'Name':<28} {'Mem(MB)':>8}  Status")
-                print(f"            {'-'*8} {'-'*28} {'-'*8}  {'-'*10}")
+                print(f"    {'PID':<8} {'Name':<28} {'Mem(MB)':>8}  Status")
+                print(f"    {'-'*8} {'-'*28} {'-'*8}  {'-'*10}")
                 for cpid, cname, cmem, cstatus in children:
-                    print(f"            {cpid:<8} {cname:<28} {cmem:>8.1f}  {cstatus}")
-            else:
-                print(f"            (no child python processes)")
+                    print(f"    {cpid:<8} {cname:<28} {cmem:>8.1f}  {cstatus}")
         except psutil.NoSuchProcess:
-            print(f"            claude PID {pid}  (already exited)  channel={channel}")
+            print(f"    claude PID {pid}  (already exited)  channel={channel}")
     else:
-        print(f"            channel={channel}  (starting...)")
+        print(f"    channel={channel}  (starting...)")
 
-# MCP servers
+# ── MCP servers (all stdio) ───────────────────────────────────────────────────
+
 WORK_DIR = os.path.dirname(BASE_DIR)
-runtime_config_path = os.path.join(WORK_DIR, ".mcp.runtime.json")
+mcp_config_path = os.path.join(WORK_DIR, ".mcp.json")
+print()
+print("[MCP SERVERS]  stdio (per-request)")
 try:
-    with open(runtime_config_path, encoding="utf-8") as f:
-        runtime_config = json.load(f)
-    mcp_servers = runtime_config.get("mcpServers", {})
-    print()
-    print("[MCP SERVERS]")
-    print(f"  {'Name':<20} {'Mode':<8} {'Status'}")
-    print(f"  {'-'*20} {'-'*8} {'-'*10}")
-    for name, cfg in mcp_servers.items():
-        if cfg.get("type") == "sse":
-            url = cfg.get("url", "")
-            port = int(url.split(":")[-1].split("/")[0])
-            try:
-                import socket
-                with socket.create_connection(("127.0.0.1", port), timeout=1):
-                    status = f"running (port {port})"
-            except OSError:
-                status = f"DOWN (port {port})"
-        else:
-            status = "per-request"
-        mode = "SSE" if cfg.get("type") == "sse" else "stdio"
-        print(f"  {name:<20} {mode:<8} {status}")
+    with open(mcp_config_path, encoding="utf-8") as f:
+        mcp_config = json.load(f)
+    for name in mcp_config.get("mcpServers", {}):
+        print(f"  {name}")
 except Exception:
-    pass
+    print("  (could not read .mcp.json)")
 
-# Python processes
+# ── Python processes ──────────────────────────────────────────────────────────
+
 print()
 print("[PYTHON PROCESSES]")
 print(f"  {'PID':<8} {'Name':<30} {'Mem(MB)':>8}  Status")

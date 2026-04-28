@@ -12,6 +12,7 @@ Control your local Claude Code via Slack. Send development tasks from your phone
 - On startup, detects any interrupted tasks and notifies you to resend
 - Watchdog process automatically restarts the bot if it crashes or stops responding
 - MCP tools start on-demand per request and exit when done (no persistent background servers)
+- Claude can take screenshots and send them directly to Slack via the `computer` MCP tool
 
 ## Prerequisites
 
@@ -54,11 +55,52 @@ Use this if you are setting up independently without a shared team app.
 
 1. In the left sidebar, click **OAuth & Permissions**
 2. Scroll to **Scopes** → **Bot Token Scopes**, click **Add an OAuth Scope**, and add:
+   - `app_mentions:read` — receive @mention events
+   - `bookmarks:read` — view bookmarks in channels
+   - `bookmarks:write` — create and edit bookmarks
+   - `calls:read` — view call information
+   - `calls:write` — start and manage calls
+   - `channels:history` — read messages in public channels
+   - `channels:join` — join public channels
+   - `channels:manage` — manage public channels
+   - `channels:read` — list public channels and their info
    - `chat:write` — send and update messages
-   - `im:history` — read direct message history
-   - `app_mentions:read` — receive @mention messages
+   - `chat:write.customize` — send messages with custom name/avatar
+   - `chat:write.public` — post to channels without joining
+   - `commands` — add slash commands
+   - `dnd:read` — view do-not-disturb status
+   - `emoji:read` — view custom emoji
+   - `files:read` — download files and images
+   - `files:write` — upload files and images
+   - `groups:history` — read messages in private channels
+   - `groups:read` — list private channels
+   - `groups:write` — manage private channels
+   - `im:history` — read direct messages
+   - `im:read` — view DM info
+   - `im:write` — open DMs
+   - `links:read` — view URLs in messages
+   - `links:write` — unfurl URLs in messages
+   - `mpim:history` — read group DM history
+   - `mpim:read` — view group DM info
+   - `mpim:write` — send group DMs
+   - `pins:read` — view pinned content
+   - `pins:write` — pin and unpin messages
+   - `reactions:read` — view emoji reactions
+   - `reactions:write` — add and remove reactions
+   - `reminders:read` — view reminders
+   - `reminders:write` — create and manage reminders
+   - `remote_files:read` — view remote files
+   - `remote_files:share` — share remote files
+   - `remote_files:write` — add and edit remote files
+   - `stars:read` — view starred items
+   - `stars:write` — add and remove stars
+   - `team:read` — view workspace info
+   - `usergroups:read` — view user groups
+   - `usergroups:write` — manage user groups
+   - `users.profile:read` — view user profile details
    - `users:read` — look up user information
    - `users:read.email` — look up users by email
+   - `users:write` — update user presence
 
 **3.3 Enable Socket Mode and generate App Token**
 
@@ -143,6 +185,22 @@ C:\work\claude-slack-relay\start.bat
 
 `start.bat` first stops any running instance, then launches a **watchdog** process in the background. The watchdog starts the bot, monitors it every 10 seconds, and automatically restarts it if it crashes or stops responding (heartbeat timeout: 30 seconds). Logs are written to `claudeBot.log`; watchdog events are written to `watchdog.log`.
 
+### Autostart on login (optional)
+
+To have the bot start automatically when you log in to Windows:
+
+```bat
+C:\work\claude-slack-relay\autostart_install.bat
+```
+
+This registers a Windows Task Scheduler task that runs `start.bat` on every login. To remove it:
+
+```bat
+C:\work\claude-slack-relay\autostart_remove.bat
+```
+
+> **Note:** Run `autostart_install.bat` as Administrator if you encounter permission errors.
+
 ### Stop
 
 ```bat
@@ -165,6 +223,7 @@ Shows bot PID, memory, uptime, active tasks (with message label and claude subpr
 - Claude will show `Processing...` and update it with live tool call progress
 - The message is updated with the final result once complete
 - Send `!reset` to clear conversation history and kill all running python subprocesses
+- Ask Claude to take a screenshot — it will be saved to `screen/` and sent to you in Slack automatically
 
 ## Process architecture
 
@@ -186,3 +245,4 @@ start.bat
 | `heartbeat.json` | Updated every 10s by the bot; watchdog uses this to detect hangs |
 | `sessions.json` | Conversation session IDs per Slack channel |
 | `in_progress.json` | Tasks in progress (used to notify on restart) |
+| `screen/` | Screenshots taken by Claude via the `computer` MCP tool (not tracked in git) |

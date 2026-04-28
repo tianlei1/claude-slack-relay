@@ -14,14 +14,16 @@ with open(STOP_FLAG, "w") as f:
 self_pid = os.getpid()
 to_kill = set()
 
-# Find all python processes running slack_claude_bot.py
+BOT_KEYWORDS = ("slack_claude_bot", "watchdog")
+
+# Find all python processes belonging to the bot or watchdog
 for proc in psutil.process_iter(["pid", "name", "cmdline"]):
     try:
         if proc.pid == self_pid:
             continue
         name = (proc.info["name"] or "").lower()
         cmdline = proc.info["cmdline"] or []
-        if "python" in name and any("slack_claude_bot" in arg for arg in cmdline):
+        if "python" in name and any(kw in arg for arg in cmdline for kw in BOT_KEYWORDS):
             to_kill.add(proc.pid)
             for child in proc.children(recursive=True):
                 to_kill.add(child.pid)

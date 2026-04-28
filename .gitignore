@@ -1,5 +1,8 @@
 claudeBot.log
+watchdog.log
 claudeBot.pid
+claudeBot.stop
+heartbeat.json
 histories.json
 sessions.json
 in_progress.json
@@ -7,3 +10,4 @@ config.py
 __pycache__/
 *.pyc
 .env
+screen/

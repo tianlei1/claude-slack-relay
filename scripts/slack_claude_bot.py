@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import json
 import platform
@@ -143,8 +144,37 @@ def build_system_context():
         f"You have full access to local files and MCP tools ({mcp_tools}). "
         f"IMPORTANT SAFETY RULES: "
         f"1. Never use 'taskkill /IM python.exe' or 'Stop-Process -Name python' — these kill ALL Python processes including this bot itself. Always kill by specific PID only (e.g. taskkill /PID 1234). "
-        f"2. Never use 'rm -rf', 'rmdir /s', or any recursive delete on directories without explicit user confirmation."
+        f"2. Never use 'rm -rf', 'rmdir /s', or any recursive delete on directories without explicit user confirmation. "
+        f"IMAGE SHARING: To send an image to the user in Slack, include [IMAGE:/absolute/path/to/file.png] anywhere in your response. "
+        f"The file will be uploaded automatically. You can use this with screenshots from the computer MCP tool."
     )
+
+
+_IMAGE_PATTERN = re.compile(r'\[IMAGE:([^\]]+)\]')
+
+
+def upload_images_to_slack(text: str, channel: str, client) -> str:
+    paths = _IMAGE_PATTERN.findall(text)
+    if not paths:
+        return text
+    for path in paths:
+        path = path.strip()
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                file=path,
+                filename=os.path.basename(path),
+                title=os.path.basename(path),
+            )
+            log.info(f"Uploaded image to Slack: {path}")
+        except Exception as e:
+            log.error(f"Failed to upload image {path}: {e}")
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    return _IMAGE_PATTERN.sub("", text).strip()
 
 
 def download_slack_images(files, bot_token):
@@ -420,9 +450,11 @@ def process_slack_message(event, say, client):
 
     resp = say("Processing... Please wait, this may take a moment.")
     status_ts = resp.get("ts")
-    result = ask_claude_and_update_reply(event.get("channel"), text, client, status_ts, image_paths)
+    channel = event.get("channel")
+    result = ask_claude_and_update_reply(channel, text, client, status_ts, image_paths)
+    result = upload_images_to_slack(result, channel, client)
     try:
-        client.chat_update(channel=event.get("channel"), ts=status_ts, text=result)
+        client.chat_update(channel=channel, ts=status_ts, text=result or "​")  # Slack rejects empty text
         log.info(f"Replied: {result[:80]}")
     except Exception as e:
         log.error(f"chat_update failed: {e}")
