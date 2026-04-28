@@ -2,7 +2,9 @@ import os
 import subprocess
 import json
 import platform
+import tempfile
 import time
+import requests
 os.environ["PYTHONUTF8"] = "1"
 
 from dotenv import load_dotenv
@@ -11,6 +13,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from logger import get_logger
 from mcp_manager import MCPServerManager
+import heartbeat
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_path = os.path.join(BASE_DIR, ".env")
@@ -144,16 +147,46 @@ def build_system_context():
     )
 
 
-def ask_claude_and_update_reply(channel, text, client, status_ts):
+def download_slack_images(files, bot_token):
+    """Download image files from Slack, return list of local temp file paths."""
+    SUPPORTED = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+    paths = []
+    for f in files:
+        mimetype = f.get("mimetype", "")
+        if mimetype not in SUPPORTED:
+            continue
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            continue
+        try:
+            resp = requests.get(url, headers={"Authorization": f"Bearer {bot_token}"}, timeout=30)
+            resp.raise_for_status()
+            tmp = tempfile.NamedTemporaryFile(suffix=EXT.get(mimetype, ".png"), delete=False)
+            tmp.write(resp.content)
+            tmp.close()
+            paths.append(tmp.name)
+            log.info(f"Downloaded Slack image to {tmp.name}")
+        except Exception as e:
+            log.error(f"Failed to download Slack image: {e}")
+    return paths
+
+
+def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=None):
     session_id = channel_sessions.get(channel)
     mcp_args = mcp_manager.get_mcp_args()
+    image_note = ""
+    if image_paths:
+        paths_str = ", ".join(image_paths)
+        image_note = f"\n\n[用户发送了 {len(image_paths)} 张图片，已保存至: {paths_str}，请用 Read 工具读取并分析]"
+
     if session_id:
-        cmd = ["claude", "--resume", session_id, "-p", text,
+        cmd = ["claude", "--resume", session_id, "-p", text + image_note,
                "--output-format", "stream-json", "--verbose",
                "--dangerously-skip-permissions"] + mcp_args
         log.info(f"Resuming session {session_id} for channel {channel}")
     else:
-        prompt = f"{build_system_context()}\n\n---\n\n{text}"
+        prompt = f"{build_system_context()}\n\n---\n\n{text}{image_note}"
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                "--dangerously-skip-permissions"] + mcp_args
         log.info(f"Starting new session for channel {channel}")
@@ -252,6 +285,11 @@ def ask_claude_and_update_reply(channel, text, client, status_ts):
         log.error(f"Claude subprocess exception: {e}")
     finally:
         mark_processing_done(channel, status_ts)
+        for path in (image_paths or []):
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
 
     if is_error or not had_output:
         channel_sessions.pop(channel, None)
@@ -331,10 +369,15 @@ def process_slack_message(event, say, client):
         log.warning(f"Rejected message from unauthorized user: {user_id}")
         return
     text = event.get("text", "").strip()
-    if not text:
+    files = event.get("files", [])
+    image_paths = download_slack_images(files, BOT_TOKEN) if files else []
+
+    if not text and not image_paths:
         log.warning(f"Received empty message from user {user_id}, ignored")
         return
-    log.info(f"Received: {text[:80]}")
+    if not text and image_paths:
+        text = "请分析这张图片"
+    log.info(f"Received: {text[:80]}" + (f" + {len(image_paths)} image(s)" if image_paths else ""))
 
     if text.lower() == "!reset":
         channel = event.get("channel")
@@ -377,7 +420,7 @@ def process_slack_message(event, say, client):
 
     resp = say("Processing... Please wait, this may take a moment.")
     status_ts = resp.get("ts")
-    result = ask_claude_and_update_reply(event.get("channel"), text, client, status_ts)
+    result = ask_claude_and_update_reply(event.get("channel"), text, client, status_ts, image_paths)
     try:
         client.chat_update(channel=event.get("channel"), ts=status_ts, text=result)
         log.info(f"Replied: {result[:80]}")
@@ -403,6 +446,7 @@ def on_app_mention(event, say, client):
 
 if __name__ == "__main__":
     log.info("ClaudeBot starting...")
+    heartbeat.start()
     try:
         resolve_whitelist_user_id(app.client)
     except Exception as e:
