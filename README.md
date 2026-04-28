@@ -175,6 +175,19 @@ Example configuration:
 
 > **Note:** The MCP config file lives at `C:\work\.mcp.json` (one level above this repo), so it is shared across projects and not checked into version control.
 
+### `computer` MCP tool
+
+The `computer` MCP tool provides desktop automation via two backends:
+
+- **Browser** (Selenium): `browser_open`, `browser_click`, `browser_type`, `browser_get_text`, `browser_find_elements`, `browser_run_js`, `browser_wait_for`, `browser_close` — requires Chrome started with `--remote-debugging-port=9222`, or it will start Chrome automatically.
+- **Desktop** (pyautogui): `screenshot`, `mouse_click`, `mouse_move`, `mouse_drag`, `mouse_scroll`, `keyboard_type`, `keyboard_press`, `focus_window`, `list_windows`, `run_program` — works on any Windows application.
+
+To start Chrome with the debug port so Selenium can connect to it:
+
+```bat
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
 ## Usage
 
 ### Start
