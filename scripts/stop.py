@@ -1,9 +1,9 @@
 import os
 import sys
 import psutil
+import pidfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PIDS_DIR = os.path.join(BASE_DIR, "pids")
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 
 # Signal watchdog not to restart
@@ -13,17 +13,12 @@ with open(STOP_FLAG, "w") as f:
 self_pid = os.getpid()
 to_kill = set()
 
-# Collect PIDs from all PID files
-if os.path.exists(PIDS_DIR):
-    for fname in os.listdir(PIDS_DIR):
-        if fname.endswith(".pid"):
-            try:
-                pid = int(open(os.path.join(PIDS_DIR, fname)).read().strip())
-                if pid != self_pid:
-                    to_kill.add(pid)
-            except Exception:
-                pass
+# Collect PIDs from unified PID file
+for pid in pidfile.read_all().values():
+    if isinstance(pid, int) and pid != self_pid:
+        to_kill.add(pid)
 
+# Fallback: scan for bot/watchdog processes that may not have written a PID
 BOT_KEYWORDS = ["slack_claude_bot", "watchdog"]
 
 for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -63,13 +58,5 @@ for p in alive:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
-# Clean up PID files
-if os.path.exists(PIDS_DIR):
-    for fname in os.listdir(PIDS_DIR):
-        if fname.endswith(".pid"):
-            try:
-                os.remove(os.path.join(PIDS_DIR, fname))
-            except Exception:
-                pass
-
+pidfile.clear()
 print(f"ClaudeBot stopped ({len(to_kill)} process(es) killed)")

@@ -18,6 +18,7 @@ from slack_sdk import WebClient
 from logger import get_logger
 from mcp_manager import MCPServerManager
 import heartbeat
+import pidfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_path = os.path.join(BASE_DIR, ".env")
@@ -31,19 +32,9 @@ app = App(token=BOT_TOKEN)
 
 SESSIONS_FILE = os.path.join(BASE_DIR, "sessions.json")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
-PIDS_DIR = os.path.join(BASE_DIR, "pids")
-BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
-WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 processed_events = set()
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
-
-
-def read_pid(path):
-    try:
-        return int(open(path).read().strip())
-    except Exception:
-        return None
 
 
 def load_sessions():
@@ -429,15 +420,9 @@ def process_slack_message(event, say, client):
         self_pid = os.getpid()
         # Collect PIDs to preserve: self, watchdog, and all MCP servers
         protected_pids = {self_pid}
-        pid = read_pid(WATCHDOG_PID_FILE)
-        if pid:
-            protected_pids.add(pid)
-        if os.path.exists(PIDS_DIR):
-            for fname in os.listdir(PIDS_DIR):
-                if fname.startswith("mcp_") and fname.endswith(".pid"):
-                    pid = read_pid(os.path.join(PIDS_DIR, fname))
-                    if pid:
-                        protected_pids.add(pid)
+        for pid in pidfile.read_all().values():
+            if pid:
+                protected_pids.add(pid)
         killed = []
         failed = []
         try:
@@ -528,7 +513,7 @@ def on_app_mention(event, say, client):
 
 def _start_watchdog_if_needed():
     try:
-        pid = read_pid(WATCHDOG_PID_FILE)
+        pid = pidfile.read_pid("watchdog")
         if pid and psutil.pid_exists(pid):
             log.info(f"Watchdog already running (PID {pid})")
             return
@@ -546,9 +531,7 @@ def _start_watchdog_if_needed():
 
 
 if __name__ == "__main__":
-    os.makedirs(PIDS_DIR, exist_ok=True)
-    with open(BOT_PID_FILE, "w") as _f:
-        _f.write(str(os.getpid()))
+    pidfile.write_pid("bot", os.getpid())
     log.info(f"Bot PID {os.getpid()} written")
     try:
         os.remove(STOP_FLAG)

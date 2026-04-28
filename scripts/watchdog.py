@@ -13,12 +13,10 @@ import subprocess
 import psutil
 import logging
 import heartbeat
+import pidfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESTART_SCRIPT = os.path.join(BASE_DIR, "scripts", "restart.py")
-PIDS_DIR = os.path.join(BASE_DIR, "pids")
-BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
-WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 RUNTIME_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.runtime.json")
@@ -40,13 +38,6 @@ CHECK_INTERVAL = 10
 RESTART_DELAY = 5
 MAX_RAPID_RESTARTS = 5
 RAPID_RESTART_WINDOW = 300
-
-
-def read_pid(path):
-    try:
-        return int(open(path).read().strip())
-    except Exception:
-        return None
 
 
 def is_alive(pid):
@@ -103,7 +94,7 @@ def start_bot():
     log.info("Bot restart initiated via restart.py")
     for _ in range(20):
         time.sleep(0.5)
-        new_pid = read_pid(BOT_PID_FILE)
+        new_pid = pidfile.read_pid("bot")
         if new_pid and is_alive(new_pid):
             log.info(f"Bot PID {new_pid} confirmed")
             break
@@ -130,9 +121,7 @@ def restart_mcp(name, info):
         )
         log_file.close()
         log.info(f"MCP '{name}' restarted (PID {proc.pid})")
-        pid_file = os.path.join(PIDS_DIR, f"mcp_{name}.pid")
-        with open(pid_file, "w") as f:
-            f.write(str(proc.pid))
+        pidfile.write_pid(f"mcp_{name}", proc.pid)
         return proc.pid
     except Exception as e:
         log.error(f"Failed to restart MCP '{name}': {e}")
@@ -153,17 +142,14 @@ def update_runtime_config_pid(name, new_pid):
 
 # ── startup ───────────────────────────────────────────────────────────────────
 
-os.makedirs(PIDS_DIR, exist_ok=True)
-
 # Kill any existing watchdog instance
-old_pid = read_pid(WATCHDOG_PID_FILE)
+old_pid = pidfile.read_pid("watchdog")
 if old_pid and old_pid != os.getpid() and is_alive(old_pid):
     log.info(f"Killing old watchdog PID {old_pid}")
     kill_tree(old_pid, "replaced by new instance")
     time.sleep(1)
 
-with open(WATCHDOG_PID_FILE, "w") as f:
-    f.write(str(os.getpid()))
+pidfile.write_pid("watchdog", os.getpid())
 log.info(f"Watchdog started (PID {os.getpid()})")
 
 if os.path.exists(STOP_FLAG):
@@ -182,7 +168,7 @@ while True:
     time.sleep(CHECK_INTERVAL)
 
     # ── check bot ─────────────────────────────────────────────────────────────
-    bot_pid = read_pid(BOT_PID_FILE)
+    bot_pid = pidfile.read_pid("bot")
     bot_process_dead = not is_alive(bot_pid)
     hb_ok = heartbeat.is_alive(HEARTBEAT_TIMEOUT)
 
@@ -241,9 +227,6 @@ while True:
 
 if os.path.exists(STOP_FLAG):
     os.remove(STOP_FLAG)
-try:
-    os.remove(WATCHDOG_PID_FILE)
-except Exception:
-    pass
+pidfile.remove_pid("watchdog")
 heartbeat.clear()
 log.info("Watchdog stopped")

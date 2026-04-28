@@ -3,22 +3,13 @@ import sys
 import datetime
 import json
 import psutil
+import pidfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PIDS_DIR = os.path.join(BASE_DIR, "pids")
-BOT_PID_FILE = os.path.join(PIDS_DIR, "bot.pid")
-WATCHDOG_PID_FILE = os.path.join(PIDS_DIR, "watchdog.pid")
 HEARTBEAT_FILE = os.path.join(BASE_DIR, "heartbeat.json")
 RUNTIME_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.runtime.json")
 MCP_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.json")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
-
-
-def read_pid(path):
-    try:
-        return int(open(path).read().strip())
-    except Exception:
-        return None
 
 
 def proc_info(pid):
@@ -35,7 +26,7 @@ def proc_info(pid):
 
 # ── Watchdog ──────────────────────────────────────────────────────────────────
 
-watchdog_pid = read_pid(WATCHDOG_PID_FILE)
+watchdog_pid = pidfile.read_pid("watchdog")
 info = proc_info(watchdog_pid)
 if info:
     _, mem, uptime = info
@@ -46,7 +37,7 @@ else:
 # ── Bot ───────────────────────────────────────────────────────────────────────
 
 print()
-bot_pid = read_pid(BOT_PID_FILE)
+bot_pid = pidfile.read_pid("bot")
 info = proc_info(bot_pid)
 if info:
     _, mem, uptime = info

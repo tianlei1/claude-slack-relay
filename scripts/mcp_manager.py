@@ -4,6 +4,7 @@ import socket
 import subprocess
 import time
 
+import pidfile
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -17,14 +18,12 @@ class MCPServerManager:
     def __init__(self, mcp_config_path):
         self.mcp_config_path = mcp_config_path
         self._base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self._pids_dir = os.path.join(self._base_dir, "pids")
         self._logs_dir = os.path.join(self._base_dir, "logs")
         self._runtime_config_path = os.path.join(
             os.path.dirname(mcp_config_path), RUNTIME_CONFIG_FILENAME
         )
 
     def start(self):
-        os.makedirs(self._pids_dir, exist_ok=True)
         os.makedirs(self._logs_dir, exist_ok=True)
 
         if not os.path.exists(self.mcp_config_path):
@@ -54,7 +53,7 @@ class MCPServerManager:
             env = {**os.environ, **env_cfg}
             if self._port_open(port):
                 log.info(f"MCP server '{name}' already running on port {port}, reusing")
-                existing_pid = self._read_pid(name)
+                existing_pid = pidfile.read_pid(f"mcp_{name}")
                 runtime_config["mcpServers"][name] = self._sse_entry(port, existing_pid, cmd, env_cfg)
             else:
                 pid = self._start_sse(name, cmd, env, port)
@@ -107,7 +106,7 @@ class MCPServerManager:
             log.info(f"MCP server '{name}' starting on port {port} (PID {proc.pid})...")
             if self._wait_for_port(port):
                 log.info(f"MCP server '{name}' ready on port {port} (PID {proc.pid})")
-                self._write_pid(name, proc.pid)
+                pidfile.write_pid(f"mcp_{name}", proc.pid)
                 return proc.pid
             else:
                 log.error(f"MCP server '{name}' did not become ready within {READY_TIMEOUT}s")
@@ -134,22 +133,6 @@ class MCPServerManager:
                 return True
             time.sleep(0.5)
         return False
-
-    def _pid_file(self, name):
-        return os.path.join(self._pids_dir, f"mcp_{name}.pid")
-
-    def _write_pid(self, name, pid):
-        try:
-            with open(self._pid_file(name), "w") as f:
-                f.write(str(pid))
-        except Exception as e:
-            log.warning(f"Failed to write PID file for MCP '{name}': {e}")
-
-    def _read_pid(self, name):
-        try:
-            return int(open(self._pid_file(name)).read().strip())
-        except Exception:
-            return None
 
     def get_mcp_args(self):
         if os.path.exists(self._runtime_config_path):
