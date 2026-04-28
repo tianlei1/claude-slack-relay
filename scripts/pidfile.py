@@ -4,8 +4,7 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PIDS_FILE = os.path.join(_BASE_DIR, "pids.txt")
 
 
-def _load():
-    """Return dict {name: pid} from pids.txt."""
+def read_all():
     result = {}
     try:
         with open(_PIDS_FILE, encoding="utf-8") as f:
@@ -28,24 +27,20 @@ def _save(data):
 
 
 def read_pid(name):
-    return _load().get(name)
+    return read_all().get(name)
 
 
 def write_pid(name, pid):
-    data = _load()
+    data = read_all()
     data[name] = pid
     _save(data)
 
 
 def remove_pid(name):
-    data = _load()
+    data = read_all()
     if name in data:
         data.pop(name)
         _save(data)
-
-
-def read_all():
-    return _load()
 
 
 def clear():

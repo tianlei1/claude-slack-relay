@@ -14,6 +14,7 @@ import psutil
 import logging
 import heartbeat
 import pidfile
+from mcp_manager import launch_mcp_proc
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESTART_SCRIPT = os.path.join(BASE_DIR, "scripts", "restart.py")
@@ -101,7 +102,6 @@ def start_bot():
 
 
 def restart_mcp(name, info):
-    """Restart a dead MCP server using command stored in runtime config."""
     cmd = info.get("cmd")
     env_overrides = info.get("env", {})
     if not cmd:
@@ -111,33 +111,13 @@ def restart_mcp(name, info):
     log_path = os.path.join(LOGS_DIR, f"mcp_{name}.log")
     env = {**os.environ, **env_overrides}
     try:
-        log_file = open(log_path, "a", encoding="utf-8")
-        proc = subprocess.Popen(
-            cmd, env=env,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-        )
-        log_file.close()
+        proc = launch_mcp_proc(cmd, env, log_path)
         log.info(f"MCP '{name}' restarted (PID {proc.pid})")
         pidfile.write_pid(f"mcp_{name}", proc.pid)
         return proc.pid
     except Exception as e:
         log.error(f"Failed to restart MCP '{name}': {e}")
         return None
-
-
-def update_runtime_config_pid(name, new_pid):
-    try:
-        with open(RUNTIME_CONFIG, encoding="utf-8") as f:
-            config = json.load(f)
-        if name in config.get("mcpServers", {}):
-            config["mcpServers"][name]["pid"] = new_pid
-        with open(RUNTIME_CONFIG, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-    except Exception as e:
-        log.warning(f"Failed to update runtime config PID for '{name}': {e}")
 
 
 # ── startup ───────────────────────────────────────────────────────────────────
@@ -211,6 +191,7 @@ while True:
     try:
         with open(RUNTIME_CONFIG, encoding="utf-8") as f:
             runtime = json.load(f)
+        changed = False
         for name, info in runtime.get("mcpServers", {}).items():
             if info.get("type") != "sse":
                 continue
@@ -219,7 +200,11 @@ while True:
                 log.warning(f"MCP '{name}' (PID {pid}) is dead, restarting...")
                 new_pid = restart_mcp(name, info)
                 if new_pid:
-                    update_runtime_config_pid(name, new_pid)
+                    info["pid"] = new_pid
+                    changed = True
+        if changed:
+            with open(RUNTIME_CONFIG, "w", encoding="utf-8") as f:
+                json.dump(runtime, f, indent=2)
     except Exception as e:
         log.debug(f"Could not check MCP servers: {e}")
 

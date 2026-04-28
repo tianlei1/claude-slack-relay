@@ -14,6 +14,20 @@ BASE_PORT = 18000
 READY_TIMEOUT = 15
 
 
+def launch_mcp_proc(cmd, env, log_path):
+    """Launch a detached MCP subprocess, appending output to log_path. Returns Popen."""
+    log_file = open(log_path, "a", encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd, env=env,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
+    )
+    log_file.close()
+    return proc
+
+
 class MCPServerManager:
     def __init__(self, mcp_config_path):
         self.mcp_config_path = mcp_config_path
@@ -94,15 +108,7 @@ class MCPServerManager:
     def _start_sse(self, name, cmd, env, port):
         log_path = os.path.join(self._logs_dir, f"mcp_{name}.log")
         try:
-            log_file = open(log_path, "a", encoding="utf-8")
-            proc = subprocess.Popen(
-                cmd, env=env,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=log_file,
-            )
-            log_file.close()
+            proc = launch_mcp_proc(cmd, env, log_path)
             log.info(f"MCP server '{name}' starting on port {port} (PID {proc.pid})...")
             if self._wait_for_port(port):
                 log.info(f"MCP server '{name}' ready on port {port} (PID {proc.pid})")
