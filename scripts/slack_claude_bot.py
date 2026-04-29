@@ -399,23 +399,50 @@ def is_allowed_user(client, user_id):
         return False
 
 
+def _cleanup_images(image_paths):
+    for p in image_paths:
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
+
+
 def _enqueue(channel, text, image_paths, client):
-    """Add to channel queue. Returns queue position (1-based), or None if full."""
+    """Add to channel queue. Returns queue position (1-based), None if full, False on error."""
     with _queue_lock:
         q = _channel_queues.setdefault(channel, deque())
         if len(q) >= MAX_QUEUE_SIZE:
             return None
         pos = len(q) + 1
+    try:
+        resp = client.chat_postMessage(channel=channel, text=f"已收到，排队第 {pos} 条，请稍候...")
+        status_ts = resp["ts"]
+    except Exception as e:
+        log.error(f"Failed to post queue placeholder: {e}")
+        return False
+    with _queue_lock:
+        _channel_queues.setdefault(channel, deque()).append(
+            {"text": text, "image_paths": image_paths, "client": client, "status_ts": status_ts}
+        )
+    log.info(f"Queued message for channel {channel} (pos={pos})")
+    return pos
+
+
+def _execute_and_reply(channel, text, image_paths, client, status_ts):
+    result = ask_claude_and_update_reply(channel, text, client, status_ts, image_paths)
+    result = upload_images_to_slack(result, channel, client)
+    try:
+        client.chat_update(channel=channel, ts=status_ts, text=result or "​")
+        log.info(f"Replied: {result[:80]}")
+    except Exception as e:
+        log.error(f"chat_update failed: {e}")
         try:
-            resp = client.chat_postMessage(channel=channel, text=f"已收到，排队第 {pos} 条，请稍候...")
-            status_ts = resp["ts"]
-        except Exception as e:
-            log.error(f"Failed to post queue placeholder: {e}")
-            return None
-        q.append({"text": text, "image_paths": image_paths, "client": client,
-                   "channel": channel, "status_ts": status_ts})
-        log.info(f"Queued message for channel {channel} (pos={pos})")
-        return pos
+            client.chat_postMessage(channel=channel, text=result)
+        except Exception:
+            pass
+    with _queue_lock:
+        if _channel_queues.get(channel):
+            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
 
 
 def _process_next_queued(channel):
@@ -432,20 +459,7 @@ def _process_next_queued(channel):
                            text="Processing... Please wait, this may take a moment.")
     except Exception:
         pass
-    result = ask_claude_and_update_reply(channel, entry["text"], client, status_ts, entry["image_paths"])
-    result = upload_images_to_slack(result, channel, client)
-    try:
-        client.chat_update(channel=channel, ts=status_ts, text=result or "​")
-        log.info(f"Replied (queued): {result[:80]}")
-    except Exception as e:
-        log.error(f"chat_update failed (queued): {e}")
-        try:
-            client.chat_postMessage(channel=channel, text=result)
-        except Exception:
-            pass
-    with _queue_lock:
-        if _channel_queues.get(channel):
-            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
+    _execute_and_reply(channel, entry["text"], entry["image_paths"], client, status_ts)
 
 
 def process_slack_message(event, say, client):
@@ -475,11 +489,7 @@ def process_slack_message(event, say, client):
         total_size = sum(os.path.getsize(p) for p in image_paths if os.path.exists(p))
         if total_size > MAX_IMAGE_SIZE:
             say(f"图片总大小超过 100MB（{total_size // 1024 // 1024}MB），无法处理。")
-            for p in image_paths:
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
+            _cleanup_images(image_paths)
             return
 
     channel = event.get("channel")
@@ -552,26 +562,12 @@ def process_slack_message(event, say, client):
         pos = _enqueue(channel, text, image_paths, client)
         if pos is None:
             say(f"队列已满（{MAX_QUEUE_SIZE} 条排队中），请稍后再试。")
-            for p in image_paths:
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
+            _cleanup_images(image_paths)
         return
 
     resp = say("Processing... Please wait, this may take a moment.")
     status_ts = resp.get("ts")
-    result = ask_claude_and_update_reply(channel, text, client, status_ts, image_paths)
-    result = upload_images_to_slack(result, channel, client)
-    try:
-        client.chat_update(channel=channel, ts=status_ts, text=result or "​")  # Slack rejects empty text
-        log.info(f"Replied: {result[:80]}")
-    except Exception as e:
-        log.error(f"chat_update failed: {e}")
-        say(result)
-    with _queue_lock:
-        if _channel_queues.get(channel):
-            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
+    _execute_and_reply(channel, text, image_paths, client, status_ts)
 
 
 @app.event("message")
