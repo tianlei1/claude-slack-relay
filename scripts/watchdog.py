@@ -20,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESTART_SCRIPT = os.path.join(BASE_DIR, "scripts", "restart.py")
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
-RUNTIME_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.runtime.json")
+RUNTIME_CONFIG = os.path.join(BASE_DIR, ".mcp.runtime.json")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
 logging.basicConfig(

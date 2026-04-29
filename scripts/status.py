@@ -7,8 +7,8 @@ import pidfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEARTBEAT_FILE = os.path.join(BASE_DIR, "heartbeat.json")
-RUNTIME_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.runtime.json")
-MCP_CONFIG = os.path.join(os.path.dirname(BASE_DIR), ".mcp.json")
+RUNTIME_CONFIG = os.path.join(BASE_DIR, ".mcp.runtime.json")
+MCP_CONFIG = os.path.join(BASE_DIR, ".mcp.json")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 
 

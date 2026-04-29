@@ -11,3 +11,7 @@ __pycache__/
 *.pyc
 .env
 screen/
+.mcp.json
+.mcp.runtime.json
+pids.txt
+logs/

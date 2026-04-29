@@ -7,8 +7,10 @@ import glob
 import platform
 import tempfile
 import time
+import threading
 import requests
 import psutil
+from collections import deque
 os.environ["PYTHONUTF8"] = "1"
 
 from dotenv import load_dotenv
@@ -35,6 +37,11 @@ IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 processed_events = set()
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
+MAX_QUEUE_SIZE = 3
+MAX_IMAGE_SIZE = 100 * 1024 * 1024
+
+_channel_queues: dict = {}
+_queue_lock = threading.Lock()
 
 
 def load_sessions():
@@ -57,7 +64,7 @@ channel_sessions = load_sessions()
 
 WORK_DIR = os.path.dirname(BASE_DIR)
 
-mcp_manager = MCPServerManager(os.path.join(WORK_DIR, ".mcp.json"))
+mcp_manager = MCPServerManager(os.path.join(BASE_DIR, ".mcp.json"))
 
 
 def load_in_progress():
@@ -130,7 +137,7 @@ def lookup_ad_display_name():
 
 
 def read_mcp_server_names():
-    mcp_config = os.path.join(WORK_DIR, ".mcp.json")
+    mcp_config = os.path.join(BASE_DIR, ".mcp.json")
     try:
         with open(mcp_config, encoding="utf-8") as f:
             data = json.load(f)
@@ -392,6 +399,55 @@ def is_allowed_user(client, user_id):
         return False
 
 
+def _enqueue(channel, text, image_paths, client):
+    """Add to channel queue. Returns queue position (1-based), or None if full."""
+    with _queue_lock:
+        q = _channel_queues.setdefault(channel, deque())
+        if len(q) >= MAX_QUEUE_SIZE:
+            return None
+        pos = len(q) + 1
+        try:
+            resp = client.chat_postMessage(channel=channel, text=f"已收到，排队第 {pos} 条，请稍候...")
+            status_ts = resp["ts"]
+        except Exception as e:
+            log.error(f"Failed to post queue placeholder: {e}")
+            return None
+        q.append({"text": text, "image_paths": image_paths, "client": client,
+                   "channel": channel, "status_ts": status_ts})
+        log.info(f"Queued message for channel {channel} (pos={pos})")
+        return pos
+
+
+def _process_next_queued(channel):
+    """Pop and process the next queued message for channel."""
+    with _queue_lock:
+        q = _channel_queues.get(channel)
+        if not q:
+            return
+        entry = q.popleft()
+    client = entry["client"]
+    status_ts = entry["status_ts"]
+    try:
+        client.chat_update(channel=channel, ts=status_ts,
+                           text="Processing... Please wait, this may take a moment.")
+    except Exception:
+        pass
+    result = ask_claude_and_update_reply(channel, entry["text"], client, status_ts, entry["image_paths"])
+    result = upload_images_to_slack(result, channel, client)
+    try:
+        client.chat_update(channel=channel, ts=status_ts, text=result or "​")
+        log.info(f"Replied (queued): {result[:80]}")
+    except Exception as e:
+        log.error(f"chat_update failed (queued): {e}")
+        try:
+            client.chat_postMessage(channel=channel, text=result)
+        except Exception:
+            pass
+    with _queue_lock:
+        if _channel_queues.get(channel):
+            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
+
+
 def process_slack_message(event, say, client):
     event_id = event.get("event_ts") or event.get("ts")
     if event_id in processed_events:
@@ -414,6 +470,17 @@ def process_slack_message(event, say, client):
     if not text and image_paths:
         text = "请分析这张图片"
     log.info(f"Received: {text[:80]}" + (f" + {len(image_paths)} image(s)" if image_paths else ""))
+
+    if image_paths:
+        total_size = sum(os.path.getsize(p) for p in image_paths if os.path.exists(p))
+        if total_size > MAX_IMAGE_SIZE:
+            say(f"图片总大小超过 100MB（{total_size // 1024 // 1024}MB），无法处理。")
+            for p in image_paths:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+            return
 
     channel = event.get("channel")
     if text.lower() == "!reset":
@@ -450,6 +517,8 @@ def process_slack_message(event, say, client):
         save_in_progress({})
         channel_sessions.pop(channel, None)
         save_sessions(channel_sessions)
+        with _queue_lock:
+            _channel_queues.pop(channel, None)
         msg = "Conversation history cleared."
         if killed:
             msg += f" Killed {len(killed)} python process(es): PID {', '.join(str(p) for p in killed)}."
@@ -480,8 +549,14 @@ def process_slack_message(event, say, client):
 
     in_progress = load_in_progress()
     if any(v["channel"] == channel for v in in_progress.values()):
-        say("Previous message is still being processed. Please wait.")
-        log.info(f"Rejected concurrent request for channel {channel}")
+        pos = _enqueue(channel, text, image_paths, client)
+        if pos is None:
+            say(f"队列已满（{MAX_QUEUE_SIZE} 条排队中），请稍后再试。")
+            for p in image_paths:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
         return
 
     resp = say("Processing... Please wait, this may take a moment.")
@@ -494,6 +569,9 @@ def process_slack_message(event, say, client):
     except Exception as e:
         log.error(f"chat_update failed: {e}")
         say(result)
+    with _queue_lock:
+        if _channel_queues.get(channel):
+            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
 
 
 @app.event("message")
