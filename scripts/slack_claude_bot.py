@@ -37,11 +37,14 @@ IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 processed_events = set()
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
-MAX_QUEUE_SIZE = 3
+MAX_QUEUE_SIZE = 2
+MAX_WORKERS = 2
 MAX_IMAGE_SIZE = 100 * 1024 * 1024
 
-_channel_queues: dict = {}
-_queue_lock = threading.Lock()
+_message_queue = deque()
+_queue_cond = threading.Condition()
+_processing_count = 0
+_worker_threads: list = []
 
 
 def load_sessions():
@@ -118,22 +121,23 @@ def notify_interrupted_requests():
     log.info(f"Notified {len(data)} interrupted request(s) after restart")
 
 
-def lookup_ad_display_name():
+def _query_ad_property(prop: str) -> str | None:
     try:
         result = subprocess.run(
             ["powershell", "-Command",
-             "$s=New-Object System.DirectoryServices.DirectorySearcher;"
-             "$s.Filter='(&(objectClass=user)(sAMAccountName=' + $env:USERNAME + '))';"
-             "$s.PropertiesToLoad.Add('displayName')|Out-Null;"
-             "($s.FindOne()).Properties['displayName'][0]"],
+             f"$s=New-Object System.DirectoryServices.DirectorySearcher;"
+             f"$s.Filter='(&(objectClass=user)(sAMAccountName=' + $env:USERNAME + '))';"
+             f"$s.PropertiesToLoad.Add('{prop}')|Out-Null;"
+             f"($s.FindOne()).Properties['{prop}'][0]"],
             capture_output=True, text=True, timeout=10
         )
-        name = result.stdout.strip()
-        if name:
-            return name
+        return result.stdout.strip() or None
     except Exception:
-        pass
-    return os.environ.get("USERNAME", "Unknown")
+        return None
+
+
+def lookup_ad_display_name():
+    return _query_ad_property("displayName") or os.environ.get("USERNAME", "Unknown")
 
 
 def read_mcp_server_names():
@@ -157,6 +161,13 @@ def build_system_context():
         f"IMPORTANT SAFETY RULES: "
         f"1. Never use 'taskkill /IM python.exe' or 'Stop-Process -Name python' — these kill ALL Python processes including this bot itself. Always kill by specific PID only (e.g. taskkill /PID 1234). "
         f"2. Never use 'rm -rf', 'rmdir /s', or any recursive delete on directories without explicit user confirmation. "
+        f"GUI OPERATION: "
+        f"Step 1 — always start with app_screenshot(title_keyword, name, grid=True) to bring the window to focus and see the current screen with pixel-coordinate labels. "
+        f"Step 2 — for any button or control you need to click: check list_templates() first. If a matching template exists, use find_template_on_screen(name, click=True) for pixel-accurate clicking. "
+        f"Step 3 — if no template exists yet, estimate the element's position from the grid, call capture_template(name, x, y, width, height) to save it, then use find_template_on_screen(name, click=True). "
+        f"Step 4 — if you need a precise coordinate for mouse_click and template matching is not suitable, use screenshot_region(name, x, y, width, height) to zoom into the target area. "
+        f"The zoomed image shows grid lines every 10px with labels showing absolute screen coordinates — read the exact x/y from it and pass directly to mouse_click(x, y). "
+        f"Direct mouse_click(x, y) is only a fallback when template matching fails. "
         f"IMAGE SHARING: To send an image to the user in Slack, include [IMAGE:/absolute/path/to/file.png] anywhere in your response. "
         f"The file will be uploaded automatically. You can use this with screenshots from the computer MCP tool."
     )
@@ -262,7 +273,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
             last_update_time = now
 
     label = text[:40].strip()
-    had_output = True
+    had_output = False
     mark_processing_start(channel, status_ts, label=label)
     try:
         proc = subprocess.Popen(
@@ -306,7 +317,23 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
                 final_result = event.get("result", "").strip()
 
         stderr_output = proc.stderr.read().strip()
+        try:
+            children = psutil.Process(proc.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
+            children = []
         proc.wait()
+        for child in children:
+            try:
+                child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        if children:
+            _, alive = psutil.wait_procs(children, timeout=3)
+            for child in alive:
+                try:
+                    child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
         elapsed = time.time() - start_time
         log.info(f"Claude subprocess finished: PID {proc.pid}, exit code {proc.returncode}, elapsed {elapsed:.1f}s")
 
@@ -328,11 +355,12 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
         log.error(f"Claude subprocess exception: {e}")
     finally:
         mark_processing_done(channel, status_ts)
-        for path in (image_paths or []):
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+        _cleanup_images(image_paths or [])
+
+    result_lower = final_result.lower()
+    if is_error and ("403" in result_lower or "authenticate" in result_lower
+                     or "forbidden" in result_lower):
+        final_result = "Claude 连接失败（认证过期或网络断开）。请在服务器上运行 `claude` 重新登录，然后重启 bot。"
 
     if is_error or not had_output:
         channel_sessions.pop(channel, None)
@@ -346,21 +374,13 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
 
 
 def lookup_ad_email():
-    try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "$s=New-Object System.DirectoryServices.DirectorySearcher;"
-             "$s.Filter='(&(objectClass=user)(sAMAccountName=' + $env:USERNAME + '))';"
-             "$s.PropertiesToLoad.Add('mail')|Out-Null;"
-             "($s.FindOne()).Properties['mail'][0]"],
-            capture_output=True, text=True, timeout=10
-        )
-        email = result.stdout.strip().lower()
-        if "@" in email:
-            return email
-        log.warning(f"AD email lookup returned no valid email (output: '{result.stdout.strip()[:100]}')")
-    except Exception as e:
-        log.warning(f"AD email lookup failed: {e}")
+    email = (_query_ad_property("mail") or "").lower()
+    if "@" in email:
+        return email
+    if email:
+        log.warning(f"AD email lookup returned no valid email (output: '{email[:100]}')")
+    else:
+        log.warning("AD email lookup failed")
     return None
 
 
@@ -407,27 +427,6 @@ def _cleanup_images(image_paths):
             pass
 
 
-def _enqueue(channel, text, image_paths, client):
-    """Add to channel queue. Returns queue position (1-based), None if full, False on error."""
-    with _queue_lock:
-        q = _channel_queues.setdefault(channel, deque())
-        if len(q) >= MAX_QUEUE_SIZE:
-            return None
-        pos = len(q) + 1
-    try:
-        resp = client.chat_postMessage(channel=channel, text=f"已收到，排队第 {pos} 条，请稍候...")
-        status_ts = resp["ts"]
-    except Exception as e:
-        log.error(f"Failed to post queue placeholder: {e}")
-        return False
-    with _queue_lock:
-        _channel_queues.setdefault(channel, deque()).append(
-            {"text": text, "image_paths": image_paths, "client": client, "status_ts": status_ts}
-        )
-    log.info(f"Queued message for channel {channel} (pos={pos})")
-    return pos
-
-
 def _execute_and_reply(channel, text, image_paths, client, status_ts):
     result = ask_claude_and_update_reply(channel, text, client, status_ts, image_paths)
     result = upload_images_to_slack(result, channel, client)
@@ -440,26 +439,41 @@ def _execute_and_reply(channel, text, image_paths, client, status_ts):
             client.chat_postMessage(channel=channel, text=result)
         except Exception:
             pass
-    with _queue_lock:
-        if _channel_queues.get(channel):
-            threading.Thread(target=_process_next_queued, args=(channel,), daemon=True).start()
 
 
-def _process_next_queued(channel):
-    """Pop and process the next queued message for channel."""
-    with _queue_lock:
-        q = _channel_queues.get(channel)
-        if not q:
-            return
-        entry = q.popleft()
-    client = entry["client"]
-    status_ts = entry["status_ts"]
-    try:
-        client.chat_update(channel=channel, ts=status_ts,
-                           text="Processing... Please wait, this may take a moment.")
-    except Exception:
-        pass
-    _execute_and_reply(channel, entry["text"], entry["image_paths"], client, status_ts)
+def _worker():
+    """Persistent worker: blocks on condition when idle, recovers from exceptions."""
+    global _processing_count
+    while True:
+        try:
+            with _queue_cond:
+                while not _message_queue:
+                    _queue_cond.wait()
+                entry = _message_queue.popleft()
+                _processing_count += 1
+            try:
+                log.info(f"Worker picked up message for channel {entry['channel']}: {entry['text'][:60]}")
+                _execute_and_reply(entry["channel"], entry["text"], entry["image_paths"],
+                                   entry["client"], entry["status_ts"])
+            finally:
+                with _queue_cond:
+                    _processing_count -= 1
+        except Exception:
+            log.exception("Worker loop error, continuing")
+
+
+def _ensure_workers():
+    """Start worker threads up to MAX_WORKERS, replacing any that have exited."""
+    global _worker_threads
+    alive = [t for t in _worker_threads if t.is_alive()]
+    needed = MAX_WORKERS - len(alive)
+    for _ in range(needed):
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        alive.append(t)
+    if needed:
+        log.info(f"Started {needed} worker thread(s) ({len(alive)}/{MAX_WORKERS} alive)")
+    _worker_threads = alive
 
 
 def process_slack_message(event, say, client):
@@ -527,8 +541,11 @@ def process_slack_message(event, say, client):
         save_in_progress({})
         channel_sessions.pop(channel, None)
         save_sessions(channel_sessions)
-        with _queue_lock:
-            _channel_queues.pop(channel, None)
+        with _queue_cond:
+            to_remove = [e for e in _message_queue if e["channel"] == channel]
+            for e in to_remove:
+                _message_queue.remove(e)
+                _cleanup_images(e.get("image_paths") or [])
         msg = "Conversation history cleared."
         if killed:
             msg += f" Killed {len(killed)} python process(es): PID {', '.join(str(p) for p in killed)}."
@@ -557,22 +574,34 @@ def process_slack_message(event, say, client):
         say(msg)
         return
 
-    in_progress = load_in_progress()
-    if any(v["channel"] == channel for v in in_progress.values()):
-        pos = _enqueue(channel, text, image_paths, client)
-        if pos is None:
-            say(f"队列已满（{MAX_QUEUE_SIZE} 条排队中），请稍后再试。")
+    with _queue_cond:
+        waiting = len(_message_queue)
+        total = waiting + _processing_count
+        if total >= MAX_QUEUE_SIZE + MAX_WORKERS:
+            say(f"队列已满（{MAX_WORKERS} 条处理中，{MAX_QUEUE_SIZE} 条排队中），请稍后再试。")
             _cleanup_images(image_paths)
-        return
+            return
+        will_wait = _processing_count >= MAX_WORKERS
 
-    resp = say("Processing... Please wait, this may take a moment.")
+    wait_msg = f"已收到，排队第 {waiting + 1} 条，请稍候..." if will_wait else "已收到，处理中，请稍候..."
+    resp = say(wait_msg)
     status_ts = resp.get("ts")
-    _execute_and_reply(channel, text, image_paths, client, status_ts)
+
+    with _queue_cond:
+        _message_queue.append({
+            "channel": channel, "text": text,
+            "image_paths": image_paths, "client": client,
+            "status_ts": status_ts,
+        })
+        _queue_cond.notify()
+        log.info(f"Enqueued for {channel}: queue={len(_message_queue)}, processing={_processing_count}")
+    _ensure_workers()
 
 
 @app.event("message")
 def on_direct_message(event, say, client):
-    if event.get("subtype"):
+    subtype = event.get("subtype")
+    if subtype and subtype != "file_share":
         return
     process_slack_message(event, say, client)
 
@@ -623,4 +652,5 @@ if __name__ == "__main__":
     except Exception as e:
         log.error(f"Failed to resolve whitelist user at startup: {e}")
     notify_interrupted_requests()
+    _ensure_workers()
     SocketModeHandler(app, APP_TOKEN).start()
