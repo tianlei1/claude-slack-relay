@@ -35,10 +35,11 @@ app = App(token=BOT_TOKEN)
 SESSIONS_FILE = os.path.join(BASE_DIR, "sessions.json")
 IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
+STATUS_SCRIPT = os.path.join(BASE_DIR, "scripts", "status.py")
 processed_events = set()
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
-MAX_QUEUE_SIZE = 2
-MAX_WORKERS = 2
+MAX_QUEUE_SIZE = 6
+MAX_WORKERS = 4
 MAX_IMAGE_SIZE = 100 * 1024 * 1024
 
 _message_queue = deque()
@@ -251,6 +252,8 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
     is_error = False
     last_update_time = 0
     start_time = time.time()
+    usage = {}
+    cost_usd = None
 
     def build_live_message():
         parts = []
@@ -315,6 +318,8 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
                 new_session_id = event.get("session_id")
                 is_error = event.get("is_error", False) or event.get("subtype") == "error_during_execution"
                 final_result = event.get("result", "").strip()
+                usage = event.get("usage") or {}
+                cost_usd = event.get("cost_usd") or event.get("total_cost_usd")
 
         stderr_output = proc.stderr.read().strip()
         try:
@@ -370,7 +375,18 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
         log.info(f"Session saved: {new_session_id} for channel {channel}")
     save_sessions(channel_sessions)
 
-    return final_result[:3000]
+    main_text = final_result[:3000]
+    if usage and not is_error:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        parts = [f"in={in_tok:,}", f"out={out_tok:,}"]
+        if cache_read:
+            parts.append(f"cached={cache_read:,}")
+        token_line = "  /  ".join(parts)
+        cost_str = f"  ·  ${cost_usd:.4f}" if cost_usd else ""
+        main_text += f"\n\n_{token_line}{cost_str} tokens_"
+    return main_text
 
 
 def lookup_ad_email():
@@ -507,7 +523,26 @@ def process_slack_message(event, say, client):
             return
 
     channel = event.get("channel")
-    if text.lower() == "!reset":
+    if text.lower() == "!status":
+        try:
+            result = subprocess.run(
+                [sys.executable, STATUS_SCRIPT],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=15, cwd=BASE_DIR,
+            )
+            output = result.stdout.strip()
+            if stderr := result.stderr.strip():
+                output += f"\n[stderr] {stderr[:200]}"
+        except Exception as e:
+            output = f"Error running status.py: {e}"
+        with _queue_cond:
+            q_size = len(_message_queue)
+            p_count = _processing_count
+        output += f"\n\n[WORKERS]  processing={p_count}/{MAX_WORKERS}  queued={q_size}/{MAX_QUEUE_SIZE}"
+        say(f"```\n{output}\n```")
+        return
+
+    if text.lower() == "!restart":
         self_pid = os.getpid()
         # Collect PIDs to preserve: self, watchdog, and all MCP servers
         protected_pids = {self_pid}

@@ -51,7 +51,10 @@ for p in procs:
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
-gone, alive = psutil.wait_procs(procs, timeout=5)
+try:
+    gone, alive = psutil.wait_procs(procs, timeout=5)
+except (psutil.AccessDenied, OSError):
+    alive = [p for p in procs if p.is_running()]
 for p in alive:
     try:
         p.kill()

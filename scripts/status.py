@@ -89,6 +89,7 @@ for entry in in_progress.values():
 print()
 print("[MCP SERVERS]")
 cfg_path = RUNTIME_CONFIG if os.path.exists(RUNTIME_CONFIG) else MCP_CONFIG
+mcp_config = {}
 try:
     with open(cfg_path, encoding="utf-8") as f:
         mcp_config = json.load(f)
@@ -111,8 +112,27 @@ except Exception:
 
 self_pid = os.getpid()
 
+# Collect PIDs belonging to the bot: recursive children + detached MCP SSE servers
+bot_pids = set()
+if bot_pid:
+    try:
+        bot_pids.update(p.pid for p in psutil.Process(bot_pid).children(recursive=True))
+    except psutil.NoSuchProcess:
+        pass
+try:
+    for _cfg in mcp_config.get("mcpServers", {}).values():
+        _pid = _cfg.get("pid")
+        if _pid:
+            bot_pids.add(_pid)
+except Exception:
+    pass
 
-def derive_process_name(cmdline):
+
+def derive_process_name(proc):
+    try:
+        cmdline = proc.cmdline()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return "python"
     for part in cmdline:
         part_lower = part.lower()
         if "slack_claude_bot" in part_lower:
@@ -124,9 +144,19 @@ def derive_process_name(cmdline):
         if "stop.py" in part_lower:
             return "stop script"
         if "mcp-atlassian" in part_lower:
-            return "MCP Atlassian"
+            try:
+                env = proc.environ()
+                if "JIRA_URL" in env:
+                    return "MCP-Jira"
+                if "CONFLUENCE_URL" in env:
+                    return "MCP-Confluence"
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            return "MCP-Atlassian"
+        if "computer_use_mcp" in part_lower:
+            return "MCP-ComputerUse"
         if "mcp_manager" in part_lower:
-            return "MCP manager"
+            return "MCP-Manager"
     if any("scons" in c.lower() for c in cmdline):
         return "SCons build worker"
     if any("msbuild" in c.lower() for c in cmdline):
@@ -138,7 +168,7 @@ def derive_process_name(cmdline):
 
 
 print()
-print("[PYTHON PROCESSES]")
+print("[PYTHON PROCESSES]  (bot children only)")
 print(f"  {'PID':<8} {'Name':<30} {'Mem(MB)':>8}  Status")
 print(f"  {'-'*8} {'-'*30} {'-'*8}  {'-'*10}")
 for proc in psutil.process_iter(["pid", "name", "status"]):
@@ -148,9 +178,10 @@ for proc in psutil.process_iter(["pid", "name", "status"]):
         pid = proc.info["pid"]
         if pid == self_pid:
             continue
-        cmdline = proc.cmdline()
+        if pid not in bot_pids:
+            continue
         mem = round(proc.memory_info().rss / 1024 / 1024, 1)
-        label = derive_process_name(cmdline)
+        label = derive_process_name(proc)
         print(f"  {pid:<8} {label:<30} {mem:>8.1f}  {proc.info['status']}")
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         continue
