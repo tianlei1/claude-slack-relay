@@ -15,3 +15,4 @@ screen/
 .mcp.runtime.json
 pids.txt
 logs/
+.claude/
