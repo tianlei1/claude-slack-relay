@@ -4,6 +4,7 @@ import socket
 import subprocess
 import time
 
+import psutil
 import pidfile
 from logger import get_logger
 
@@ -26,6 +27,23 @@ def launch_mcp_proc(cmd, env, log_path):
     )
     log_file.close()
     return proc
+
+
+def port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.05):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_port(port: int, timeout: int = READY_TIMEOUT) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_open(port):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 class MCPServerManager:
@@ -65,10 +83,14 @@ class MCPServerManager:
             cmd = self._build_cmd(server_config, port)
             env_cfg = server_config.get("env", {})
             env = {**os.environ, **env_cfg}
-            if self._port_open(port):
-                log.info(f"MCP server '{name}' already running on port {port}, reusing")
+            if port_open(port):
                 existing_pid = pidfile.read_pid(f"mcp_{name}")
-                runtime_config["mcpServers"][name] = self._sse_entry(port, existing_pid, cmd, env_cfg)
+                if existing_pid and psutil.pid_exists(existing_pid):
+                    log.info(f"MCP server '{name}' already running on port {port}, reusing")
+                    runtime_config["mcpServers"][name] = self._sse_entry(port, existing_pid, cmd, env_cfg)
+                else:
+                    log.warning(f"MCP server '{name}': port {port} occupied by unknown process, falling back to stdio")
+                    runtime_config["mcpServers"][name] = server_config
             else:
                 pid = self._start_sse(name, cmd, env, port)
                 if pid:
@@ -100,6 +122,7 @@ class MCPServerManager:
         return {
             "type": "sse",
             "url": f"http://localhost:{port}/sse",
+            "port": port,
             "pid": pid,
             "cmd": cmd,
             "env": env,
@@ -110,7 +133,7 @@ class MCPServerManager:
         try:
             proc = launch_mcp_proc(cmd, env, log_path)
             log.info(f"MCP server '{name}' starting on port {port} (PID {proc.pid})...")
-            if self._wait_for_port(port):
+            if wait_for_port(port):
                 log.info(f"MCP server '{name}' ready on port {port} (PID {proc.pid})")
                 pidfile.write_pid(f"mcp_{name}", proc.pid)
                 return proc.pid
@@ -124,21 +147,6 @@ class MCPServerManager:
         except Exception as e:
             log.error(f"MCP server '{name}': failed to start: {e}")
             return None
-
-    def _port_open(self, port):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return True
-        except OSError:
-            return False
-
-    def _wait_for_port(self, port):
-        deadline = time.time() + READY_TIMEOUT
-        while time.time() < deadline:
-            if self._port_open(port):
-                return True
-            time.sleep(0.5)
-        return False
 
     def get_mcp_args(self):
         if os.path.exists(self._runtime_config_path):

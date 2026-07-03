@@ -7,17 +7,22 @@ Control your local Claude Code via Slack. Send development tasks from your phone
 - Chat with your local Claude Code through Slack, including from mobile
 - Live updates showing Claude's tool usage (file reads, command execution, etc.)
 - Conversation context is maintained per channel, supporting multi-turn dialogue
-- Send `!reset` to clear conversation history, kill all running subprocesses, truncate the log, delete screenshots, and start fresh
+- Up to 4 concurrent requests, 6 queued — each handled by a dedicated worker thread
+- Token usage and estimated cost shown after every response
+- Send `!status` to see process status (bot, watchdog, MCP servers, active tasks)
+- Send `!restart` to clear conversation history, kill all running subprocesses, truncate the log, delete screenshots, and start fresh
 - Only responds to the configured user — auto-detected from AD, or set manually in `.env`
 - On startup, detects any interrupted tasks and notifies you to resend
+- On startup, automatically checks Claude login status and prompts re-login if needed
 - Watchdog process automatically restarts the bot if it crashes or stops responding
-- MCP tools start on-demand per request and exit when done (no persistent background servers)
-- Claude can take screenshots and send them directly to Slack via the `computer` MCP tool
+- `computer_use` MCP server runs as a persistent SSE server (port 18000); all other MCP servers start on-demand per request
+- Claude can take screenshots and send them to Slack via `[IMAGE:/path/to/file.png]` in its response
 
 ## Prerequisites
 
 - Windows (domain-joined recommended for auto email detection, but not required)
 - Python 3.10+
+- Node.js 16+ (required for github, slack, and jenkins MCP servers)
 - [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` command must work in terminal)
 
 ## Setup
@@ -119,7 +124,7 @@ ALLOWED_USER_EMAIL=your-email@example.com
 
 ### 5. Configure MCP tools (optional)
 
-MCP tools are configured in `C:\work\.mcp.json`. On startup, each server is launched as a **persistent SSE server** on a dedicated port (starting at 18000). If a server fails to start, it falls back to stdio per-request mode.
+MCP tools are configured in `.mcp.json` at the repo root. On startup, Python-based MCP servers (like `computer_use`) are launched as **persistent SSE servers** on dedicated ports starting at 18000. All other servers (npx-based) run as **stdio, started on-demand per request**.
 
 Example configuration:
 
@@ -138,14 +143,18 @@ Example configuration:
 }
 ```
 
-> **Note:** The MCP config file lives at `C:\work\.mcp.json` (one level above this repo), so it is shared across projects and not checked into version control.
+### `computer_use` MCP tool
 
-### `computer` MCP tool
+The `computer_use` MCP tool provides desktop automation via two backends:
 
-The `computer` MCP tool provides desktop automation via two backends:
+- **Browser** (Selenium): `browser_open`, `browser_click`, `browser_type`, `browser_get_text`, `browser_find_elements`, `browser_run_js`, `browser_get_url`, `browser_wait_for`, `browser_close` — uses Microsoft Edge (path auto-detected via registry). Tries to attach to Edge on `--remote-debugging-port=9222`, or launches Edge automatically using a separate profile at `C:\temp\selenium_edge` (so it won't conflict with your existing Edge).
+- **Desktop** (pyautogui): `screenshot`, `app_screenshot`, `screenshot_region`, `mouse_click`, `mouse_move`, `mouse_drag`, `mouse_scroll`, `get_mouse_position`, `keyboard_type`, `keyboard_press`, `keyboard_hold_and_click`, `focus_window`, `list_windows`, `run_program`, `wait` — works on any Windows application.
+- **Template matching**: `capture_template`, `find_template_on_screen`, `list_templates` — capture UI elements as PNG templates and locate them on screen by pixel matching. Saved under `screen/templates/`.
 
-- **Browser** (Selenium): `browser_open`, `browser_click`, `browser_type`, `browser_get_text`, `browser_find_elements`, `browser_run_js`, `browser_wait_for`, `browser_close` — uses Microsoft Edge (path auto-detected via registry). Tries to attach to Edge on `--remote-debugging-port=9222`, or launches Edge automatically using a separate profile at `C:\temp\selenium_edge` (so it won't conflict with your existing Edge).
-- **Desktop** (pyautogui): `screenshot`, `mouse_click`, `mouse_move`, `mouse_drag`, `mouse_scroll`, `keyboard_type`, `keyboard_press`, `focus_window`, `list_windows`, `run_program` — works on any Windows application.
+**Recommended screenshot workflow:**
+1. `app_screenshot(title_keyword, name, grid=True)` — focus the target window and take a grid-overlay screenshot showing pixel coordinates
+2. `find_template_on_screen(name, click=True)` — click a previously captured template (most reliable for custom controls)
+3. `screenshot_region(name, x, y, width, height)` — zoom into a region for precise coordinate identification before calling `mouse_click`
 
 To manually start Edge with the debug port (optional — the tool will start it automatically if not running):
 
@@ -161,17 +170,22 @@ msedge --remote-debugging-port=9222
 C:\work\claude-slack-relay\start.bat
 ```
 
-`start.bat` launches the **bot** directly as a background process. The bot writes its PID, starts the MCP servers, then spawns a **watchdog** that monitors it every 10 seconds and automatically restarts it if it crashes or stops responding (heartbeat timeout: 30 seconds). Logs are written to `claudeBot.log`; watchdog events to `watchdog.log`; MCP server logs to `logs/mcp_<name>.log`.
+`start.bat` launches the **bot** as a background process. On startup the bot:
+1. Starts the heartbeat thread
+2. Spawns the **watchdog** (monitors every 10s, restarts on crash or 30s heartbeat timeout)
+3. Checks Claude login status; prompts re-login in the browser if needed
+4. Starts all configured MCP servers
+5. Connects to Slack via Socket Mode
+
+Logs are written to `claudeBot.log` (append); watchdog events to `watchdog.log` (append); MCP server logs to `logs/mcp_<name>.log`.
 
 ### Autostart on login (optional)
-
-To have the bot start automatically when you log in to Windows:
 
 ```bat
 C:\work\claude-slack-relay\autostart_install.bat
 ```
 
-This registers a Windows Task Scheduler task that runs `start.bat` on every login. To remove it:
+Registers a Windows Task Scheduler task that runs `start.bat` on every login. To remove it:
 
 ```bat
 C:\work\claude-slack-relay\autostart_remove.bat
@@ -185,7 +199,7 @@ C:\work\claude-slack-relay\autostart_remove.bat
 python scripts\stop.py
 ```
 
-Signals the watchdog not to restart, then terminates the bot and all its child processes.
+Signals the watchdog not to restart, then terminates the bot, watchdog, and all child processes.
 
 ### Check status
 
@@ -193,38 +207,42 @@ Signals the watchdog not to restart, then terminates the bot and all its child p
 python scripts\status.py
 ```
 
-Shows bot PID, memory, uptime, active tasks (with message label and claude subprocess info), MCP server status, and all Python child processes.
+Or send `!status` in Slack. Shows bot PID, memory, uptime, heartbeat age, active tasks (with Claude subprocess info and memory), MCP server status, and worker queue depth.
 
 ### Using in Slack
 
 - Direct message ClaudeBot, or `@ClaudeBot` in a channel
 - Claude will show `Processing...` and update it with live tool call progress
-- The message is updated with the final result once complete
-- Send `!reset` to clear conversation history, kill all running python subprocesses, truncate the log, and delete all screenshots in `screen/`
-- Ask Claude to take a screenshot — it will be saved to `screen/` and sent to you in Slack automatically
+- The final message includes the result plus token usage: `in=12,450 / out=876 / cached=8,200 · $0.0184 tokens`
+- Send `!status` to check process health without leaving Slack
+- Send `!restart` to clear conversation history, kill all running python subprocesses, truncate the log, and delete all screenshots in `screen/`
+- Attach images — they are downloaded to `C:\work\claude_temporary\` and Claude is told the path to read and analyse them
+- Claude can send images back to Slack: include `[IMAGE:/absolute/path/to/file.png]` anywhere in its response and the file will be uploaded automatically
 
 ## Process architecture
 
 ```
 start.bat
   └── slack_claude_bot.py   (bot main process, writes heartbeat every 10s)
-        └── claude ...      (per-request subprocess, spawned per Slack message)
+        └── claude ...      (per-request subprocess, one per Slack message, up to 4 concurrent)
 
 watchdog.py                 (detached, monitors heartbeat + MCP PIDs, restarts bot on crash)
-mcp servers                 (detached, persistent SSE servers, one port each)
+computer_use_mcp.py         (detached SSE server, port 18000, persistent)
+other MCP servers           (started on-demand per request, stdio)
 ```
 
 ## Files
 
 | File | Description |
 |---|---|
-| `claudeBot.log` | Bot log (truncated on each start and on `!reset`) |
+| `claudeBot.log` | Bot log (append across restarts; truncated on `!restart`) |
 | `watchdog.log` | Watchdog restart/event log (append) |
-| `pids/bot.pid` | PID of the bot process |
-| `pids/watchdog.pid` | PID of the watchdog process |
-| `pids/mcp_<name>.pid` | PID of each MCP server |
-| `logs/mcp_<name>.log` | Stdout/stderr log for each MCP server |
+| `pids.txt` | PIDs of bot, watchdog, and all MCP servers |
+| `logs/mcp_<name>.log` | Stdout/stderr log for each MCP server (append) |
 | `heartbeat.json` | Updated every 10s by the bot; watchdog uses this to detect hangs |
 | `sessions.json` | Conversation session IDs per Slack channel |
 | `in_progress.json` | Tasks in progress (used to notify on restart) |
-| `screen/` | Screenshots taken by Claude via the `computer` MCP tool (cleared on `!reset`, not tracked in git) |
+| `.mcp.json` | MCP server definitions (static config) |
+| `.mcp.runtime.json` | Generated at startup; contains resolved SSE URLs and PIDs |
+| `screen/` | Screenshots taken by Claude (cleared on `!restart`, not tracked in git) |
+| `screen/templates/` | Captured UI element templates for `find_template_on_screen` (keep these) |

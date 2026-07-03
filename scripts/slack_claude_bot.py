@@ -4,6 +4,7 @@ import subprocess
 import sys
 import json
 import glob
+import functools
 import platform
 import tempfile
 import time
@@ -37,10 +38,13 @@ IN_PROGRESS_FILE = os.path.join(BASE_DIR, "in_progress.json")
 WATCHDOG_SCRIPT = os.path.join(BASE_DIR, "scripts", "watchdog.py")
 STATUS_SCRIPT = os.path.join(BASE_DIR, "scripts", "status.py")
 processed_events = set()
+_processed_events_lock = threading.Lock()
 STOP_FLAG = os.path.join(BASE_DIR, "claudeBot.stop")
 MAX_QUEUE_SIZE = 6
 MAX_WORKERS = 4
 MAX_IMAGE_SIZE = 100 * 1024 * 1024
+IMAGE_SAVE_DIR = r"C:\work\claude_temporary"
+os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
 _message_queue = deque()
 _queue_cond = threading.Condition()
@@ -137,6 +141,7 @@ def _query_ad_property(prop: str) -> str | None:
         return None
 
 
+@functools.lru_cache(maxsize=None)
 def lookup_ad_display_name():
     return _query_ad_property("displayName") or os.environ.get("USERNAME", "Unknown")
 
@@ -216,7 +221,7 @@ def download_slack_images(files, bot_token):
         try:
             resp = requests.get(url, headers={"Authorization": f"Bearer {bot_token}"}, timeout=30)
             resp.raise_for_status()
-            tmp = tempfile.NamedTemporaryFile(suffix=EXT.get(mimetype, ".png"), delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=EXT.get(mimetype, ".png"), delete=False, dir=IMAGE_SAVE_DIR)
             tmp.write(resp.content)
             tmp.close()
             paths.append(tmp.name)
@@ -494,11 +499,12 @@ def _ensure_workers():
 
 def process_slack_message(event, say, client):
     event_id = event.get("event_ts") or event.get("ts")
-    if event_id in processed_events:
-        return
-    processed_events.add(event_id)
-    if len(processed_events) > 500:
-        processed_events.clear()
+    with _processed_events_lock:
+        if event_id in processed_events:
+            return
+        processed_events.add(event_id)
+        if len(processed_events) > 500:
+            processed_events.clear()
 
     user_id = event.get("user")
     if not is_allowed_user(client, user_id):
@@ -668,6 +674,41 @@ def _start_watchdog_if_needed():
     log.info(f"Watchdog started (PID {proc.pid})")
 
 
+def _ensure_claude_login():
+    """Probe Claude login status; run 'claude login' (opens browser) if not logged in."""
+    log.info("Checking Claude login status...")
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "ping", "--output-format", "stream-json",
+             "--dangerously-skip-permissions"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, cwd=WORK_DIR,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL,
+        )
+        combined = (result.stdout + result.stderr).lower()
+        if "not logged in" not in combined and "/login" not in combined:
+            log.info("Claude login OK")
+            return
+        log.warning("Claude is not logged in — launching browser login...")
+    except FileNotFoundError:
+        log.error("'claude' not found in PATH — skipping login check")
+        return
+    except subprocess.TimeoutExpired:
+        log.warning("Claude login probe timed out — assuming logged in")
+        return
+    except Exception as e:
+        log.warning(f"Claude login probe error: {e} — skipping")
+        return
+
+    try:
+        subprocess.run(["claude", "login"], timeout=300, cwd=WORK_DIR,
+                       stdin=subprocess.DEVNULL)
+        log.info("claude login completed")
+    except Exception as e:
+        log.error(f"claude login failed: {e}")
+
+
 if __name__ == "__main__":
     pidfile.write_pid("bot", os.getpid())
     log.info(f"Bot PID {os.getpid()} written")
@@ -679,6 +720,7 @@ if __name__ == "__main__":
 
     heartbeat.start()
     _start_watchdog_if_needed()
+    _ensure_claude_login()
     mcp_manager.start()
 
     log.info("ClaudeBot starting...")

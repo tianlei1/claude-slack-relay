@@ -144,7 +144,15 @@ def _by(by: str):
 def _selector(selector: str, by: str) -> str:
     """For 'text' mode, wrap selector in an XPath contains expression."""
     if by.lower() == "text":
-        return f"//*[contains(normalize-space(.), '{selector}')]"
+        if "'" not in selector:
+            xpath_val = f"'{selector}'"
+        elif '"' not in selector:
+            xpath_val = f'"{selector}"'
+        else:
+            parts = selector.split("'")
+            concat_args = ", \"'\", ".join(f"'{p}'" for p in parts)
+            xpath_val = f"concat({concat_args})"
+        return f"//*[contains(normalize-space(.), {xpath_val})]"
     return selector
 
 

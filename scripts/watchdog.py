@@ -14,7 +14,7 @@ import psutil
 import logging
 import heartbeat
 import pidfile
-from mcp_manager import launch_mcp_proc
+from mcp_manager import launch_mcp_proc, wait_for_port, READY_TIMEOUT
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESTART_SCRIPT = os.path.join(BASE_DIR, "scripts", "restart.py")
@@ -107,12 +107,15 @@ def restart_mcp(name, info):
     if not cmd:
         log.warning(f"No restart command for MCP '{name}'")
         return None
+    port = info.get("port")
     os.makedirs(LOGS_DIR, exist_ok=True)
     log_path = os.path.join(LOGS_DIR, f"mcp_{name}.log")
     env = {**os.environ, **env_overrides}
     try:
         proc = launch_mcp_proc(cmd, env, log_path)
-        log.info(f"MCP '{name}' restarted (PID {proc.pid})")
+        log.info(f"MCP '{name}' restarted (PID {proc.pid}), waiting for port {port}...")
+        if port and not wait_for_port(port):
+            log.warning(f"MCP '{name}' did not become ready within {READY_TIMEOUT}s on port {port}")
         pidfile.write_pid(f"mcp_{name}", proc.pid)
         return proc.pid
     except Exception as e:

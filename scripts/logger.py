@@ -13,7 +13,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8", mode="w"),
+        logging.FileHandler(LOG_FILE, encoding="utf-8", mode="a"),
         logging.StreamHandler(),
     ]
 )

@@ -135,8 +135,6 @@ def derive_process_name(proc):
         return "python"
     for part in cmdline:
         part_lower = part.lower()
-        if "slack_claude_bot" in part_lower:
-            return "ClaudeBot (bot)"
         if "watchdog" in part_lower:
             return "watchdog"
         if "status.py" in part_lower:

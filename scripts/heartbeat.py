@@ -4,8 +4,11 @@ the watchdog reads it to detect hangs.
 """
 import os
 import json
+import logging
 import time
 import threading
+
+_log = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEARTBEAT_FILE = os.path.join(BASE_DIR, "heartbeat.json")
@@ -19,8 +22,8 @@ def start():
             try:
                 with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
                     json.dump({"ts": time.time(), "pid": os.getpid()}, f)
-            except Exception:
-                pass
+            except Exception as e:
+                _log.error(f"Heartbeat write failed: {e}")
             time.sleep(INTERVAL)
 
     t = threading.Thread(target=_loop, daemon=True)
