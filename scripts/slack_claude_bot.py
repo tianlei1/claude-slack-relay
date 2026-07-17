@@ -241,13 +241,11 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
 
     if session_id:
         cmd = ["claude", "--resume", session_id, "-p", text + image_note,
-               "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions"] + mcp_args
+               "--output-format", "stream-json", "--verbose"] + mcp_args
         log.info(f"Resuming session {session_id} for channel {channel}")
     else:
         prompt = f"{build_system_context()}\n\n---\n\n{text}{image_note}"
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions"] + mcp_args
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"] + mcp_args
         log.info(f"Starting new session for channel {channel}")
 
     tool_steps = []
@@ -679,8 +677,7 @@ def _ensure_claude_login():
     log.info("Checking Claude login status...")
     try:
         result = subprocess.run(
-            ["claude", "-p", "ping", "--output-format", "stream-json",
-             "--dangerously-skip-permissions"],
+            ["claude", "-p", "ping", "--output-format", "stream-json"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30, cwd=WORK_DIR,
             creationflags=subprocess.CREATE_NO_WINDOW,
