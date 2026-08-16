@@ -167,6 +167,8 @@ def build_system_context():
         f"IMPORTANT SAFETY RULES: "
         f"1. Never use 'taskkill /IM python.exe' or 'Stop-Process -Name python' — these kill ALL Python processes including this bot itself. Always kill by specific PID only (e.g. taskkill /PID 1234). "
         f"2. Never use 'rm -rf', 'rmdir /s', or any recursive delete on directories without explicit user confirmation. "
+        f"3. Never run kill_tests.py (C:\work\TestCenter-AutoTest\Scripts\kill_tests.py) more than once for the same kill attempt — if the PID file is already gone from a prior run, there is nothing left to kill. Running it again triggers a dangerous fallback that kills ALL Python processes including this bot. "
+        f"4. Before running any kill/stop script, check whether another session already ran it (the PID file will be missing). If so, skip the kill entirely. "
         f"GUI OPERATION: "
         f"Step 1 — always start with app_screenshot(title_keyword, name, grid=True) to bring the window to focus and see the current screen with pixel-coordinate labels. "
         f"Step 2 — for any button or control you need to click: check list_templates() first. If a matching template exists, use find_template_on_screen(name, click=True) for pixel-accurate clicking. "
@@ -287,7 +289,7 @@ def ask_claude_and_update_reply(channel, text, client, status_ts, image_paths=No
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace",
-            cwd=WORK_DIR,
+            cwd=BASE_DIR,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
         mark_processing_start(channel, status_ts, proc.pid, label=label)
