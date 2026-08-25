@@ -548,6 +548,17 @@ def process_slack_message(event, say, client):
         say(f"```\n{output}\n```")
         return
 
+    if text.lower() == "!clear":
+        channel_sessions.pop(channel, None)
+        save_sessions(channel_sessions)
+        with _queue_cond:
+            to_remove = [e for e in _message_queue if e["channel"] == channel]
+            for e in to_remove:
+                _message_queue.remove(e)
+                _cleanup_images(e.get("image_paths") or [])
+        say("Conversation history cleared.")
+        return
+
     if text.lower() == "!restart":
         self_pid = os.getpid()
         # Collect PIDs to preserve: self, watchdog, and all MCP servers
